@@ -96,15 +96,20 @@ class RunPodClient:
             return response.json()
         except Exception as e:
             print(f"API Error: {e}")
+            print(f"Response: {response.text if 'response' in locals() else 'No response'}")
             raise
 
     def get_pod(self, pod_id: str) -> Optional[Dict]:
-        """Get details for a specific pod"""
+        """Get details for a specific pod including GPU type and status"""
         query = f"""
         query Pod {{
           pod(input: {{podId: "{pod_id}"}}) {{
             id
             name
+            desiredStatus
+            machine {{
+              gpuTypeId
+            }}
             runtime {{
               ports {{
                 ip
@@ -220,6 +225,93 @@ class RunPodClient:
         print(f"Timeout waiting for pod {pod_id}")
         return False
 
+    def stop_pod(self, pod_id: str) -> bool:
+        """
+        Stop a running pod without deleting it.
+        The pod can be resumed later to avoid GPU search and initialization time.
+        """
+        print(f"Stopping pod {pod_id}...")
+
+        mutation = f"""
+        mutation {{
+          podStop(input: {{podId: "{pod_id}"}}) {{
+            id
+            desiredStatus
+          }}
+        }}
+        """
+
+        result = self._graphql_query(mutation)
+
+        if "errors" in result:
+            print(f"Errors stopping pod: {result['errors']}")
+            return False
+
+        print(f"Pod {pod_id} stopped successfully (can be resumed later)")
+        return True
+
+    def resume_pod(self, pod_id: str, gpu_count: int = 1) -> bool:
+        """
+        Resume a stopped pod.
+        Returns True if successful, False otherwise.
+        """
+        print(f"Resuming pod {pod_id}...")
+
+        mutation = f"""
+        mutation {{
+          podResume(input: {{
+            podId: "{pod_id}",
+            gpuCount: {gpu_count}
+          }}) {{
+            id
+            desiredStatus
+            imageName
+          }}
+        }}
+        """
+
+        result = self._graphql_query(mutation)
+
+        if "errors" in result:
+            print(f"Errors resuming pod: {result['errors']}")
+            return False
+
+        print(f"Pod {pod_id} resumed successfully")
+        return True
+
+    def list_pods(self) -> list:
+        """
+        List all pods for the current user.
+        Returns list of pod dictionaries with id, name, machine.gpuTypeId, and desiredStatus.
+        """
+        query = """
+        query {
+          myself {
+            pods {
+              id
+              name
+              desiredStatus
+              machine {
+                gpuTypeId
+              }
+              runtime {
+                ports {
+                  ip
+                  publicPort
+                  type
+                }
+              }
+            }
+          }
+        }
+        """
+
+        result = self._graphql_query(query)
+
+        if "data" in result and result["data"].get("myself"):
+            return result["data"]["myself"].get("pods", [])
+        return []
+
     def terminate_pod(self, pod_id: str) -> bool:
         """Terminate/delete a pod"""
         print(f"Terminating pod {pod_id}...")
@@ -250,7 +342,7 @@ class SSHConnection:
         self.timeout = timeout
         self.client = None
 
-    def connect(self, max_retries: int = 10) -> bool:
+    def connect(self, max_retries: int = 30) -> bool:
         """Connect to the SSH server with retries"""
         for attempt in range(max_retries):
             try:
@@ -334,7 +426,35 @@ def get_latest_pod_id() -> Optional[str]:
     return None
 
 
-def shutdown_pod():
+def pause_pod():
+    """Pause (stop) the latest pod without deleting it"""
+    print_section("RunPod Pause")
+
+    api_key = os.environ.get("RUNPOD_API_KEY")
+    if not api_key:
+        print("ERROR: RUNPOD_API_KEY not set in environment")
+        sys.exit(1)
+
+    pod_id = get_latest_pod_id()
+    if not pod_id:
+        print("ERROR: No pod found in .latest_pod file")
+        print("Cannot determine which pod to pause")
+        sys.exit(1)
+
+    print(f"Found pod ID: {pod_id}")
+
+    api_url = "https://api.runpod.io/graphql"
+    client = RunPodClient(api_key, api_url)
+
+    if client.stop_pod(pod_id):
+        print(f"\nSuccessfully paused pod {pod_id}")
+        print("Pod can be resumed later with the 'reuse' feature")
+    else:
+        print(f"\nFailed to pause pod {pod_id}")
+        sys.exit(1)
+
+
+def destroy_pod():
     """Shutdown the latest pod"""
     print_section("RunPod Shutdown")
 
@@ -391,15 +511,75 @@ def main(cfg: DictConfig):
             if latest_pod_id:
                 print(f"\n1. Checking if latest pod {latest_pod_id} is available...")
                 existing_pod = client.get_pod(latest_pod_id)
-                if existing_pod and existing_pod.get("runtime"):
-                    print(f"   Latest pod {latest_pod_id} is available and running!")
-                    print(f"   Reusing existing pod instead of creating a new one.")
-                    pod_id = latest_pod_id
+
+                if existing_pod:
+                    if existing_pod.get("runtime"):
+                        # Pod is running, reuse it
+                        print(f"   Latest pod {latest_pod_id} is available and running!")
+                        print(f"   Reusing existing pod instead of creating a new one.")
+                        pod_id = latest_pod_id
+                    else:
+                        # Pod exists but is stopped
+                        print(f"   Latest pod {latest_pod_id} is stopped.")
+
+                        # Check if GPU type matches
+                        pod_gpu_type = existing_pod.get("machine", {}).get("gpuTypeId", "")
+                        desired_gpu_type = cfg.gpu_type_id
+
+                        if pod_gpu_type == desired_gpu_type:
+                            # GPU matches, resume the pod
+                            print(f"   GPU type matches ({pod_gpu_type}). Resuming pod...")
+                            if client.resume_pod(latest_pod_id):
+                                print(f"   Pod {latest_pod_id} resumed successfully!")
+                                pod_id = latest_pod_id
+                                # Wait for pod to be ready
+                                if not client.wait_for_pod_ready(pod_id, cfg.startup_wait):
+                                    print("ERROR: Pod failed to start in time after resume")
+                                    sys.exit(1)
+                            else:
+                                print(f"   Failed to resume pod {latest_pod_id}")
+                                print("   Will search for other stopped pods or create new one.")
+                        else:
+                            # GPU mismatch
+                            print(f"   WARNING: Latest pod has GPU type '{pod_gpu_type}' but config specifies '{desired_gpu_type}'")
+                            print("   Searching for stopped pods with matching GPU type...")
+
+                            # Search all user's pods for a matching stopped pod
+                            all_pods = client.list_pods()
+                            pod_name_prefix = f"{user_name}-{cfg.pod_name}"
+
+                            matching_stopped_pod = None
+                            for pod in all_pods:
+                                # Check if pod matches: name prefix, GPU type, and is stopped
+                                if (pod.get("name", "").startswith(pod_name_prefix) and
+                                    pod.get("machine", {}).get("gpuTypeId") == desired_gpu_type and
+                                    not pod.get("runtime")):
+                                    matching_stopped_pod = pod
+                                    break
+
+                            if matching_stopped_pod:
+                                matched_pod_id = matching_stopped_pod["id"]
+                                print(f"   Found stopped pod {matched_pod_id} with matching GPU type!")
+                                print(f"   Resuming pod {matched_pod_id}...")
+
+                                if client.resume_pod(matched_pod_id):
+                                    print(f"   Pod {matched_pod_id} resumed successfully!")
+                                    pod_id = matched_pod_id
+                                    save_latest_pod_id(pod_id)
+
+                                    # Wait for pod to be ready
+                                    if not client.wait_for_pod_ready(pod_id, cfg.startup_wait):
+                                        print("ERROR: Pod failed to start in time after resume")
+                                        sys.exit(1)
+                                else:
+                                    print(f"   Failed to resume pod {matched_pod_id}")
+                                    print("   Will create a new pod.")
+                            else:
+                                print(f"   No stopped pods found with GPU type '{desired_gpu_type}'")
+                                print("   Will create a new pod.")
                 else:
-                    print(
-                        f"   Latest pod {latest_pod_id} is not available or not running."
-                    )
-                    print(f"   Will create a new pod.")
+                    print(f"   Latest pod {latest_pod_id} not found (may have been deleted).")
+                    print("   Will create a new pod.")
 
         # Create new pod if we don't have one yet
         if not pod_id or pod_id == "null":
@@ -525,7 +705,11 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "shutdown":
-        shutdown_pod()
-    else:
-        main()
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "destroy":
+            destroy_pod()
+            exit(0)
+        elif sys.argv[1] in ["pause", "stop"]:
+            pause_pod()
+            exit(0)
+    main()
