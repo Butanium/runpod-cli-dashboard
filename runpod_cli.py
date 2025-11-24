@@ -8,8 +8,7 @@ import os
 import sys
 import time
 import webbrowser
-import threading
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 from pathlib import Path
 import requests
 import paramiko
@@ -335,6 +334,34 @@ def get_latest_pod_id() -> Optional[str]:
     return None
 
 
+def shutdown_pod():
+    """Shutdown the latest pod"""
+    print_section("RunPod Shutdown")
+
+    api_key = os.environ.get("RUNPOD_API_KEY")
+    if not api_key:
+        print("ERROR: RUNPOD_API_KEY not set in environment")
+        sys.exit(1)
+
+    pod_id = get_latest_pod_id()
+    if not pod_id:
+        print("ERROR: No pod found in .latest_pod file")
+        print("Cannot determine which pod to shutdown")
+        sys.exit(1)
+
+    print(f"Found pod ID: {pod_id}")
+
+    api_url = "https://api.runpod.io/graphql"
+    client = RunPodClient(api_key, api_url)
+
+    if client.terminate_pod(pod_id):
+        print(f"\nSuccessfully shut down pod {pod_id}")
+        Path(".latest_pod").unlink(missing_ok=True)
+    else:
+        print(f"\nFailed to shut down pod {pod_id}")
+        sys.exit(1)
+
+
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
     """Main entry point for RunPod CLI Dashboard"""
@@ -445,15 +472,6 @@ def main(cfg: DictConfig):
         print("\n3. ERROR: No SSH port found for this pod")
         sys.exit(1)
 
-    # Wait for SSH to be fully ready (especially for newly created pods)
-    uptime = pod["runtime"]["uptimeInSeconds"]
-    if uptime < 60:
-        wait_time = 60 - uptime
-        print(
-            f"\n   Pod is very new (uptime: {uptime}s), waiting {wait_time}s for SSH to initialize..."
-        )
-        time.sleep(wait_time)
-
     print(f"\n3. Connecting to SSH: {ssh_port['ip']}:{ssh_port['publicPort']}")
     ssh = SSHConnection(
         host=ssh_port["ip"],
@@ -507,4 +525,7 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "shutdown":
+        shutdown_pod()
+    else:
+        main()
