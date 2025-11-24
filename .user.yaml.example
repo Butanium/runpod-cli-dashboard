@@ -1,0 +1,5 @@
+# User Identity Configuration
+# Copy this file to .user.yaml and set your username
+# This file is gitignored - each user should have their own
+
+name: "your-username"  # lowercase, alphanumeric (hyphens/underscores allowed)

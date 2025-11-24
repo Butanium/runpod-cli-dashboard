@@ -1,6 +1,7 @@
 # project specific ignores
 outputs/
 .latest_pod
+.user.yaml
 
 # Python-generated files
 __pycache__/

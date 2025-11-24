@@ -13,12 +13,68 @@ from typing import Dict, Optional, List
 from pathlib import Path
 import requests
 import paramiko
+import yaml
 from dotenv import load_dotenv
 import hydra
 from omegaconf import DictConfig
 
 # Load environment variables
 load_dotenv()
+
+USER_CONFIG_FILE = Path(__file__).parent / ".user.yaml"
+
+
+def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
+    """Get username from CLI override, .user.yaml, or prompt user"""
+
+    # CLI override takes precedence
+    if cli_override:
+        username = cli_override.strip().lower()
+        if not username.replace('-', '').replace('_', '').isalnum():
+            print("ERROR: Username must be alphanumeric (hyphens/underscores allowed)")
+            sys.exit(1)
+        return username
+
+    # Try loading from .user.yaml
+    if USER_CONFIG_FILE.exists():
+        try:
+            with open(USER_CONFIG_FILE, 'r') as f:
+                config = yaml.safe_load(f)
+                if config and 'name' in config:
+                    return config['name']
+        except Exception as e:
+            print(f"Warning: Could not read {USER_CONFIG_FILE}: {e}")
+
+    # Interactive prompt
+    print("\n" + "=" * 80)
+    print("Welcome! Please set up your user identity.")
+    print("=" * 80)
+    print("\nYour username will be used to:")
+    print("  - Prefix pod names for easy identification")
+    print("  - Track your running pods")
+    print("\nThis will be saved in .user.yaml (gitignored)")
+
+    while True:
+        username = input("\nEnter your username (lowercase, alphanumeric): ").strip().lower()
+
+        if not username:
+            print("ERROR: Username cannot be empty")
+            continue
+
+        if not username.replace('-', '').replace('_', '').isalnum():
+            print("ERROR: Username must be alphanumeric (hyphens/underscores allowed)")
+            continue
+
+        # Save to .user.yaml
+        try:
+            with open(USER_CONFIG_FILE, 'w') as f:
+                yaml.dump({'name': username}, f, default_flow_style=False)
+            print(f"\nUser identity saved to {USER_CONFIG_FILE}")
+            print("=" * 80 + "\n")
+            return username
+        except Exception as e:
+            print(f"ERROR: Could not save user config: {e}")
+            sys.exit(1)
 
 
 class RunPodClient:
@@ -289,17 +345,21 @@ def main(cfg: DictConfig):
         print("ERROR: RUNPOD_API_KEY not set in environment")
         sys.exit(1)
 
+    # Get or prompt for user identity
+    user_name = get_or_prompt_user(cfg.get('user_name'))
+
     print_section("RunPod CLI Dashboard")
+    print(f"User: {user_name}")
 
     # Initialize RunPod client
-    client = RunPodClient(api_key, cfg.runpod.api_url)
+    client = RunPodClient(api_key, cfg.api_url)
 
     # Step 1: Get or create pod
-    pod_id = cfg.runpod.target_pod_id
+    pod_id = cfg.target_pod_id
 
     if not pod_id or pod_id == "null":
         # Check if reuse is enabled and there's a latest pod
-        if cfg.runpod.reuse:
+        if cfg.reuse:
             latest_pod_id = get_latest_pod_id()
             if latest_pod_id:
                 print(f"\n1. Checking if latest pod {latest_pod_id} is available...")
@@ -316,17 +376,20 @@ def main(cfg: DictConfig):
 
         # Create new pod if we don't have one yet
         if not pod_id or pod_id == "null":
+            # Prefix pod name with username
+            pod_name = f"{user_name}-{cfg.pod_name}"
+
             print(
-                f"\n1. Creating new pod with A40 GPU and template {cfg.runpod.template_id}"
+                f"\n1. Creating new pod with A40 GPU and template {cfg.template_id}"
             )
             pod_id = client.create_pod(
-                template_id=cfg.runpod.template_id,
-                name=cfg.runpod.pod_name,
-                gpu_type_id=cfg.runpod.gpu_type_id,
-                app_port=cfg.runpod.app_port,
-                volume_gb=cfg.runpod.volume_in_gb,
-                container_disk_gb=cfg.runpod.container_disk_in_gb,
-                volume_mount=cfg.runpod.volume_mount_path,
+                template_id=cfg.template_id,
+                name=pod_name,
+                gpu_type_id=cfg.gpu_type_id,
+                app_port=cfg.app_port,
+                volume_gb=cfg.volume_in_gb,
+                container_disk_gb=cfg.container_disk_in_gb,
+                volume_mount=cfg.volume_mount_path,
             )
 
             if not pod_id:
@@ -339,7 +402,7 @@ def main(cfg: DictConfig):
             save_latest_pod_id(pod_id)
 
             # Wait for pod to be ready
-            if not client.wait_for_pod_ready(pod_id, cfg.runpod.startup_wait):
+            if not client.wait_for_pod_ready(pod_id, cfg.startup_wait):
                 print("ERROR: Pod failed to start in time")
                 sys.exit(1)
     else:
@@ -372,7 +435,7 @@ def main(cfg: DictConfig):
         )
         if port["type"] == "tcp" and port["privatePort"] == 22:
             ssh_port = port
-        elif port["type"] == "http" and port["privatePort"] == cfg.runpod.app_port:
+        elif port["type"] == "http" and port["privatePort"] == cfg.app_port:
             http_port = port
 
     print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
@@ -395,16 +458,16 @@ def main(cfg: DictConfig):
     ssh = SSHConnection(
         host=ssh_port["ip"],
         port=ssh_port["publicPort"],
-        username=cfg.runpod.ssh.username,
-        timeout=cfg.runpod.ssh.timeout,
+        username=cfg.ssh.username,
+        timeout=cfg.ssh.timeout,
     )
 
     if not ssh.connect():
         print("ERROR: Failed to connect via SSH")
         sys.exit(1)
 
-    print(f"\n4. Launching HTTP server on port {cfg.runpod.app_port}...")
-    stdout, stderr = ssh.execute_command(cfg.runpod.remote_command, background=True)
+    print(f"\n4. Launching HTTP server on port {cfg.app_port}...")
+    stdout, stderr = ssh.execute_command(cfg.remote_command, background=True)
 
     print("\n   Command Output:")
     print("   " + "=" * 76)
@@ -427,7 +490,7 @@ def main(cfg: DictConfig):
 
     # Step 4: Get public URL and open in browser
     # Use RunPod's proxy URL format: https://{pod_id}-{port}.proxy.runpod.net/
-    app_url = f"https://{pod_id}-{cfg.runpod.app_port}.proxy.runpod.net/"
+    app_url = f"https://{pod_id}-{cfg.app_port}.proxy.runpod.net/"
     print(f"\n5. Pod HTTP Endpoint: {app_url}")
 
     print(f"\n6. Opening {app_url} in browser...")
