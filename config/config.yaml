@@ -28,6 +28,16 @@ ssh:
   username: "root"
   timeout: 30
 
+# TMux settings (the fact that this is a template is probably overkill but well, claude decided to make it like this)
+tmux_session_name: "runpod-{pod_id}"
+tmux_log_file: "/tmp/runpod-{pod_id}.log"
+
+# Stream command output to terminal (default: true)
+stream_output: true
+
+# Restart command even if tmux session already exists (default: false)
+restart_command: false
+
 # Command to run on the pod (starts a simple HTTP server on port 8501)
 remote_command: |
   nohup python3 -c "

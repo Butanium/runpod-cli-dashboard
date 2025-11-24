@@ -29,7 +29,7 @@ def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
     # CLI override takes precedence
     if cli_override:
         username = cli_override.strip().lower()
-        if not username.replace('-', '').replace('_', '').isalnum():
+        if not username.replace("-", "").replace("_", "").isalnum():
             print("ERROR: Username must be alphanumeric (hyphens/underscores allowed)")
             sys.exit(1)
         return username
@@ -37,10 +37,10 @@ def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
     # Try loading from .user.yaml
     if USER_CONFIG_FILE.exists():
         try:
-            with open(USER_CONFIG_FILE, 'r') as f:
+            with open(USER_CONFIG_FILE, "r") as f:
                 config = yaml.safe_load(f)
-                if config and 'name' in config:
-                    return config['name']
+                if config and "name" in config:
+                    return config["name"]
         except Exception as e:
             print(f"Warning: Could not read {USER_CONFIG_FILE}: {e}")
 
@@ -54,20 +54,22 @@ def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
     print("\nThis will be saved in .user.yaml (gitignored)")
 
     while True:
-        username = input("\nEnter your username (lowercase, alphanumeric): ").strip().lower()
+        username = (
+            input("\nEnter your username (lowercase, alphanumeric): ").strip().lower()
+        )
 
         if not username:
             print("ERROR: Username cannot be empty")
             continue
 
-        if not username.replace('-', '').replace('_', '').isalnum():
+        if not username.replace("-", "").replace("_", "").isalnum():
             print("ERROR: Username must be alphanumeric (hyphens/underscores allowed)")
             continue
 
         # Save to .user.yaml
         try:
-            with open(USER_CONFIG_FILE, 'w') as f:
-                yaml.dump({'name': username}, f, default_flow_style=False)
+            with open(USER_CONFIG_FILE, "w") as f:
+                yaml.dump({"name": username}, f, default_flow_style=False)
             print(f"\nUser identity saved to {USER_CONFIG_FILE}")
             print("=" * 80 + "\n")
             return username
@@ -96,7 +98,9 @@ class RunPodClient:
             return response.json()
         except Exception as e:
             print(f"API Error: {e}")
-            print(f"Response: {response.text if 'response' in locals() else 'No response'}")
+            print(
+                f"Response: {response.text if 'response' in locals() else 'No response'}"
+            )
             raise
 
     def get_pod(self, pod_id: str) -> Optional[Dict]:
@@ -385,7 +389,7 @@ class SSHConnection:
             return ("Background command started", "")
         else:
             print(f"\n  Executing command:\n  {command[:100]}...")
-            stdin, stdout, stderr = self.client.exec_command(command)
+            _stdin, stdout, stderr = self.client.exec_command(command)
             stdout_str = stdout.read().decode()
             stderr_str = stderr.read().decode()
             return stdout_str, stderr_str
@@ -394,6 +398,120 @@ class SSHConnection:
         """Close the SSH connection"""
         if self.client:
             self.client.close()
+
+
+def check_http_server_running(pod_id: str, app_port: int, timeout: int = 5) -> bool:
+    """
+    Check if HTTP server is responding on RunPod proxy URL.
+
+    Args:
+        pod_id: RunPod pod ID
+        app_port: Application port number
+        timeout: Request timeout in seconds
+
+    Returns:
+        True if server responds with 2xx/3xx status, False otherwise
+    """
+    url = f"https://{pod_id}-{app_port}.proxy.runpod.net/"
+    try:
+        response = requests.get(url, timeout=timeout)
+        return response.status_code < 400
+    except Exception:
+        return False
+
+
+def check_tmux_session_exists(ssh: SSHConnection, session_name: str) -> bool:
+    """
+    Check if a tmux session exists.
+
+    Args:
+        ssh: SSH connection to remote host
+        session_name: Name of tmux session
+
+    Returns:
+        True if session exists, False otherwise
+    """
+    command = f"tmux has-session -t {session_name} 2>/dev/null && echo exists"
+    stdout, _stderr = ssh.execute_command(command)
+    return "exists" in stdout
+
+
+def kill_tmux_session(ssh: SSHConnection, session_name: str) -> bool:
+    """
+    Kill a tmux session.
+
+    Args:
+        ssh: SSH connection to remote host
+        session_name: Name of tmux session
+
+    Returns:
+        True if successful, False otherwise
+    """
+    command = f"tmux kill-session -t {session_name}"
+    _stdout, stderr = ssh.execute_command(command)
+    return stderr == ""
+
+
+def create_tmux_session_with_logging(
+    ssh: SSHConnection, session_name: str, command: str, log_file: str
+) -> bool:
+    """
+    Create a new tmux session and configure it to log output to a file.
+
+    Args:
+        ssh: SSH connection to remote host
+        session_name: Name for the tmux session
+        command: Command to execute in the session
+        log_file: Path to log file for output
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Create the tmux session
+    escaped_command = command.replace("'", "'\\''")
+    create_cmd = f"tmux new-session -d -s {session_name} bash -c '{escaped_command}'"
+    _stdout, stderr = ssh.execute_command(create_cmd)
+
+    if stderr:
+        print(f"   Error creating tmux session: {stderr}")
+        return False
+
+    # Configure pipe-pane to log output
+    pipe_cmd = f"tmux pipe-pane -t {session_name} -o 'cat >> {log_file}'"
+    _stdout, stderr = ssh.execute_command(pipe_cmd)
+
+    if stderr:
+        print(f"   Warning: Could not configure logging: {stderr}")
+
+    return True
+
+
+def stream_tmux_output(ssh: SSHConnection, log_file: str):
+    """
+    Stream tmux log file output to terminal. Blocking until Ctrl+C.
+
+    Args:
+        ssh: SSH connection to remote host
+        log_file: Path to log file to stream
+    """
+    print(f"\nStreaming output from {log_file} (press Ctrl+C to stop)...")
+    print("=" * 80)
+
+    # Start tail -f command
+    command = f"tail -f {log_file}"
+    channel = ssh.client.get_transport().open_session()
+    channel.exec_command(command)
+
+    try:
+        while True:
+            if channel.recv_ready():
+                data = channel.recv(1024).decode("utf-8")
+                print(data, end="", flush=True)
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        print("\n" + "=" * 80)
+        print("Stopped streaming output")
+        channel.close()
 
 
 def print_section(title: str):
@@ -408,7 +526,7 @@ def save_latest_pod_id(pod_id: str):
     try:
         latest_pod_file = Path(".latest_pod")
         latest_pod_file.write_text(pod_id)
-        print(f"   Saved pod ID to .latest_pod file")
+        print("   Saved pod ID to .latest_pod file")
     except Exception as e:
         print(f"   Warning: Could not save pod ID to .latest_pod: {e}")
 
@@ -493,7 +611,7 @@ def main(cfg: DictConfig):
         sys.exit(1)
 
     # Get or prompt for user identity
-    user_name = get_or_prompt_user(cfg.get('user_name'))
+    user_name = get_or_prompt_user(cfg.get("user_name"))
 
     print_section("RunPod CLI Dashboard")
     print(f"User: {user_name}")
@@ -515,34 +633,50 @@ def main(cfg: DictConfig):
                 if existing_pod:
                     if existing_pod.get("runtime"):
                         # Pod is running, reuse it
-                        print(f"   Latest pod {latest_pod_id} is available and running!")
-                        print(f"   Reusing existing pod instead of creating a new one.")
+                        print(
+                            f"   Latest pod {latest_pod_id} is available and running!"
+                        )
+                        print("   Reusing existing pod instead of creating a new one.")
                         pod_id = latest_pod_id
                     else:
                         # Pod exists but is stopped
                         print(f"   Latest pod {latest_pod_id} is stopped.")
 
                         # Check if GPU type matches
-                        pod_gpu_type = existing_pod.get("machine", {}).get("gpuTypeId", "")
+                        pod_gpu_type = existing_pod.get("machine", {}).get(
+                            "gpuTypeId", ""
+                        )
                         desired_gpu_type = cfg.gpu_type_id
 
                         if pod_gpu_type == desired_gpu_type:
                             # GPU matches, resume the pod
-                            print(f"   GPU type matches ({pod_gpu_type}). Resuming pod...")
+                            print(
+                                f"   GPU type matches ({pod_gpu_type}). Resuming pod..."
+                            )
                             if client.resume_pod(latest_pod_id):
                                 print(f"   Pod {latest_pod_id} resumed successfully!")
                                 pod_id = latest_pod_id
                                 # Wait for pod to be ready
-                                if not client.wait_for_pod_ready(pod_id, cfg.startup_wait):
-                                    print("ERROR: Pod failed to start in time after resume")
+                                if not client.wait_for_pod_ready(
+                                    pod_id, cfg.startup_wait
+                                ):
+                                    print(
+                                        "ERROR: Pod failed to start in time after resume"
+                                    )
                                     sys.exit(1)
                             else:
                                 print(f"   Failed to resume pod {latest_pod_id}")
-                                print("   Will search for other stopped pods or create new one.")
+                                print(
+                                    "   Will search for other stopped pods or create new one."
+                                )
                         else:
                             # GPU mismatch
-                            print(f"   WARNING: Latest pod has GPU type '{pod_gpu_type}' but config specifies '{desired_gpu_type}'")
-                            print("   Searching for stopped pods with matching GPU type...")
+                            print(
+                                f"   WARNING: Latest pod has GPU type '{pod_gpu_type}' but config specifies '{desired_gpu_type}'"
+                            )
+                            print(
+                                "   Searching for stopped pods with matching GPU type..."
+                            )
 
                             # Search all user's pods for a matching stopped pod
                             all_pods = client.list_pods()
@@ -551,34 +685,49 @@ def main(cfg: DictConfig):
                             matching_stopped_pod = None
                             for pod in all_pods:
                                 # Check if pod matches: name prefix, GPU type, and is stopped
-                                if (pod.get("name", "").startswith(pod_name_prefix) and
-                                    pod.get("machine", {}).get("gpuTypeId") == desired_gpu_type and
-                                    not pod.get("runtime")):
+                                if (
+                                    pod.get("name", "").startswith(pod_name_prefix)
+                                    and pod.get("machine", {}).get("gpuTypeId")
+                                    == desired_gpu_type
+                                    and not pod.get("runtime")
+                                ):
                                     matching_stopped_pod = pod
                                     break
 
                             if matching_stopped_pod:
                                 matched_pod_id = matching_stopped_pod["id"]
-                                print(f"   Found stopped pod {matched_pod_id} with matching GPU type!")
+                                print(
+                                    f"   Found stopped pod {matched_pod_id} with matching GPU type!"
+                                )
                                 print(f"   Resuming pod {matched_pod_id}...")
 
                                 if client.resume_pod(matched_pod_id):
-                                    print(f"   Pod {matched_pod_id} resumed successfully!")
+                                    print(
+                                        f"   Pod {matched_pod_id} resumed successfully!"
+                                    )
                                     pod_id = matched_pod_id
                                     save_latest_pod_id(pod_id)
 
                                     # Wait for pod to be ready
-                                    if not client.wait_for_pod_ready(pod_id, cfg.startup_wait):
-                                        print("ERROR: Pod failed to start in time after resume")
+                                    if not client.wait_for_pod_ready(
+                                        pod_id, cfg.startup_wait
+                                    ):
+                                        print(
+                                            "ERROR: Pod failed to start in time after resume"
+                                        )
                                         sys.exit(1)
                                 else:
                                     print(f"   Failed to resume pod {matched_pod_id}")
                                     print("   Will create a new pod.")
                             else:
-                                print(f"   No stopped pods found with GPU type '{desired_gpu_type}'")
+                                print(
+                                    f"   No stopped pods found with GPU type '{desired_gpu_type}'"
+                                )
                                 print("   Will create a new pod.")
                 else:
-                    print(f"   Latest pod {latest_pod_id} not found (may have been deleted).")
+                    print(
+                        f"   Latest pod {latest_pod_id} not found (may have been deleted)."
+                    )
                     print("   Will create a new pod.")
 
         # Create new pod if we don't have one yet
@@ -586,9 +735,7 @@ def main(cfg: DictConfig):
             # Prefix pod name with username
             pod_name = f"{user_name}-{cfg.pod_name}"
 
-            print(
-                f"\n1. Creating new pod with A40 GPU and template {cfg.template_id}"
-            )
+            print(f"\n1. Creating new pod with A40 GPU and template {cfg.template_id}")
             pod_id = client.create_pod(
                 template_id=cfg.template_id,
                 name=pod_name,
@@ -616,7 +763,7 @@ def main(cfg: DictConfig):
         print(f"\n1. Using existing pod: {pod_id}")
 
     # Step 2: Get pod details
-    print(f"\n2. Fetching pod information...")
+    print("\n2. Fetching pod information...")
     pod = client.get_pod(pod_id)
 
     if not pod:
@@ -633,17 +780,14 @@ def main(cfg: DictConfig):
     # Extract connection information
     ports = pod["runtime"]["ports"]
     ssh_port = None
-    http_port = None
 
-    print(f"\n   Available Ports:")
+    print("\n   Available Ports:")
     for port in ports:
         print(
             f"   - Type: {port['type']}, IP: {port['ip']}, Port: {port['publicPort']}, Public: {port['isIpPublic']}"
         )
         if port["type"] == "tcp" and port["privatePort"] == 22:
             ssh_port = port
-        elif port["type"] == "http" and port["privatePort"] == cfg.app_port:
-            http_port = port
 
     print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
 
@@ -664,40 +808,63 @@ def main(cfg: DictConfig):
         print("ERROR: Failed to connect via SSH")
         sys.exit(1)
 
-    print(f"\n4. Launching HTTP server on port {cfg.app_port}...")
-    stdout, stderr = ssh.execute_command(cfg.remote_command, background=True)
+    # Format tmux session name and log file with pod_id
+    session_name = cfg.tmux_session_name.replace("{pod_id}", pod_id)
+    log_file = cfg.tmux_log_file.replace("{pod_id}", pod_id)
 
-    print("\n   Command Output:")
-    print("   " + "=" * 76)
-    for line in stdout.split("\n"):
-        if line.strip():
-            print(f"   {line}")
+    # Check if tmux session already exists and if HTTP server is running
+    tmux_exists = check_tmux_session_exists(ssh, session_name)
+    http_running = check_http_server_running(pod_id, cfg.app_port)
 
-    if stderr:
-        print("\n   Errors:")
-        print("   " + "=" * 76)
-        for line in stderr.split("\n"):
-            if line.strip():
-                print(f"   {line}")
+    print("\n4. Checking existing session and server status...")
+    print(
+        f"   TMux session '{session_name}': {'exists' if tmux_exists else 'not found'}"
+    )
+    print(f"   HTTP server: {'running' if http_running else 'not running'}")
 
-    # Give the server a moment to fully start
-    print("\n   Waiting for HTTP server to initialize...")
-    time.sleep(5)
+    should_start_command = True
 
-    ssh.close()
+    if tmux_exists and http_running:
+        if not cfg.restart_command:
+            print("   Both session and server are running - skipping command execution")
+            should_start_command = False
+        else:
+            print("   restart_command=true - killing existing tmux session")
+            kill_tmux_session(ssh, session_name)
+
+    if should_start_command:
+        print(f"\n5. Starting HTTP server in tmux session '{session_name}'...")
+        success = create_tmux_session_with_logging(
+            ssh, session_name, cfg.remote_command, log_file
+        )
+
+        if not success:
+            print("ERROR: Failed to create tmux session")
+            ssh.close()
+            sys.exit(1)
+
+        print("   TMux session created successfully")
+        print("   Waiting for HTTP server to initialize...")
+        time.sleep(5)
 
     # Step 4: Get public URL and open in browser
     # Use RunPod's proxy URL format: https://{pod_id}-{port}.proxy.runpod.net/
     app_url = f"https://{pod_id}-{cfg.app_port}.proxy.runpod.net/"
-    print(f"\n5. Pod HTTP Endpoint: {app_url}")
+    print(f"\n6. Pod HTTP Endpoint: {app_url}")
 
-    print(f"\n6. Opening {app_url} in browser...")
+    print(f"\n7. Opening {app_url} in browser...")
     try:
         webbrowser.open(app_url)
         print("   Browser opened successfully!")
     except Exception as e:
         print(f"   Failed to open browser: {e}")
         print(f"   Please manually open: {app_url}")
+
+    # Step 5: Stream output if configured
+    if cfg.stream_output:
+        stream_tmux_output(ssh, log_file)
+
+    ssh.close()
 
     print_section("Done!")
     print(f"\nPod ID: {pod_id}")
