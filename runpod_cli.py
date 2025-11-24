@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""
+RunPod CLI Dashboard
+Creates a pod, connects via SSH, launches HTTP server, and opens in browser
+"""
+
+import os
+import sys
+import time
+import webbrowser
+import threading
+from typing import Dict, Optional, List
+from pathlib import Path
+import requests
+import paramiko
+from dotenv import load_dotenv
+import hydra
+from omegaconf import DictConfig
+
+# Load environment variables
+load_dotenv()
+
+
+class RunPodClient:
+    """Client for interacting with RunPod API"""
+
+    def __init__(self, api_key: str, api_url: str):
+        self.api_key = api_key
+        self.api_url = api_url
+
+    def _graphql_query(self, query: str) -> Dict:
+        """Execute a GraphQL query against RunPod API"""
+        try:
+            response = requests.post(
+                f"{self.api_url}?api_key={self.api_key}",
+                json={"query": query},
+                headers={"content-type": "application/json"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"API Error: {e}")
+            raise
+
+    def get_pod(self, pod_id: str) -> Optional[Dict]:
+        """Get details for a specific pod"""
+        query = f"""
+        query Pod {{
+          pod(input: {{podId: "{pod_id}"}}) {{
+            id
+            name
+            runtime {{
+              ports {{
+                ip
+                isIpPublic
+                privatePort
+                publicPort
+                type
+              }}
+              uptimeInSeconds
+            }}
+          }}
+        }}
+        """
+        result = self._graphql_query(query)
+        if "data" in result and result["data"].get("pod"):
+            return result["data"]["pod"]
+        return None
+
+    def get_user_ssh_keys(self) -> Optional[str]:
+        """Get user's SSH public keys from RunPod account"""
+        query = """
+        query {
+          myself {
+            pubKey
+          }
+        }
+        """
+        result = self._graphql_query(query)
+        if "data" in result and result["data"].get("myself"):
+            return result["data"]["myself"].get("pubKey")
+        return None
+
+    def create_pod(
+        self,
+        template_id: str,
+        name: str,
+        gpu_type_id: str,
+        app_port: int,
+        volume_gb: int,
+        container_disk_gb: int,
+        volume_mount: str,
+    ) -> Optional[str]:
+        """Create a new on-demand pod"""
+        print(f"Creating pod with template {template_id}, GPU: {gpu_type_id}")
+        print(f"   Volume: {volume_gb}GB, Container Disk: {container_disk_gb}GB")
+
+        # Get SSH public keys from account
+        ssh_keys = self.get_user_ssh_keys()
+        if ssh_keys:
+            print("   SSH keys retrieved from account")
+        else:
+            print("   WARNING: No SSH keys found in account")
+
+        # Build env variables
+        env_vars = []
+        if ssh_keys:
+            # Escape the SSH keys for JSON
+            escaped_keys = ssh_keys.replace('"', '\\"').replace("\n", "\\n")
+            env_vars.append(f'{{key: "PUBLIC_KEY", value: "{escaped_keys}"}}')
+
+        env_string = f"env: [{', '.join(env_vars)}]" if env_vars else ""
+
+        mutation = f"""
+        mutation {{
+          podFindAndDeployOnDemand(
+            input: {{
+              cloudType: SECURE
+              gpuCount: 1
+              gpuTypeId: "{gpu_type_id}"
+              name: "{name}"
+              templateId: "{template_id}"
+              ports: "22/tcp,{app_port}/http"
+              volumeInGb: {volume_gb}
+              containerDiskInGb: {container_disk_gb}
+              volumeMountPath: "{volume_mount}"
+              {env_string}
+            }}
+          ) {{
+            id
+            name
+            imageName
+          }}
+        }}
+        """
+
+        result = self._graphql_query(mutation)
+        print(f"API Response: {result}")
+
+        if "errors" in result:
+            print(f"Errors creating pod: {result['errors']}")
+            return None
+
+        if "data" in result and result["data"].get("podFindAndDeployOnDemand"):
+            pod_data = result["data"]["podFindAndDeployOnDemand"]
+            return pod_data["id"]
+        return None
+
+    def wait_for_pod_ready(self, pod_id: str, timeout: int = 300) -> bool:
+        """Wait for pod to be ready and have runtime with ports"""
+        print(f"Waiting for pod {pod_id} to be ready (timeout: {timeout}s)...")
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            pod = self.get_pod(pod_id)
+            if pod and pod.get("runtime") and pod["runtime"].get("ports"):
+                print(f"Pod {pod_id} is ready!")
+                return True
+
+            elapsed = int(time.time() - start_time)
+            print(f"  [{elapsed}s] Still waiting for pod to initialize...")
+            time.sleep(10)
+
+        print(f"Timeout waiting for pod {pod_id}")
+        return False
+
+    def terminate_pod(self, pod_id: str) -> bool:
+        """Terminate/delete a pod"""
+        print(f"Terminating pod {pod_id}...")
+
+        mutation = f"""
+        mutation {{
+          podTerminate(input: {{podId: "{pod_id}"}})
+        }}
+        """
+
+        result = self._graphql_query(mutation)
+
+        if "errors" in result:
+            print(f"Errors terminating pod: {result['errors']}")
+            return False
+
+        print(f"Pod {pod_id} terminated successfully")
+        return True
+
+
+class SSHConnection:
+    """Handle SSH connections to RunPod instances"""
+
+    def __init__(self, host: str, port: int, username: str, timeout: int = 30):
+        self.host = host
+        self.port = port
+        self.username = username
+        self.timeout = timeout
+        self.client = None
+
+    def connect(self, max_retries: int = 10) -> bool:
+        """Connect to the SSH server with retries"""
+        for attempt in range(max_retries):
+            try:
+                self.client = paramiko.SSHClient()
+                self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+                print(
+                    f"  Attempting SSH connection (attempt {attempt + 1}/{max_retries})..."
+                )
+                self.client.connect(
+                    hostname=self.host,
+                    port=self.port,
+                    username=self.username,
+                    timeout=self.timeout,
+                    look_for_keys=True,
+                    allow_agent=True,
+                )
+                print(f"  Connected to {self.host}:{self.port}")
+                return True
+            except Exception as e:
+                print(f"  SSH connection attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(15)  # Wait longer between retries
+                else:
+                    print("  All SSH connection attempts failed")
+                    return False
+        return False
+
+    def execute_command(self, command: str, background: bool = False) -> tuple:
+        """Execute a command and return stdout, stderr"""
+        if not self.client:
+            raise Exception("Not connected to SSH server")
+
+        if background:
+            # For background commands, just start them and return immediately
+            print(f"\n  Executing command in background:\n  {command[:100]}...")
+            channel = self.client.get_transport().open_session()
+            channel.exec_command(command)
+            time.sleep(2)  # Give it a moment to start
+            return ("Background command started", "")
+        else:
+            print(f"\n  Executing command:\n  {command[:100]}...")
+            stdin, stdout, stderr = self.client.exec_command(command)
+            stdout_str = stdout.read().decode()
+            stderr_str = stderr.read().decode()
+            return stdout_str, stderr_str
+
+    def close(self):
+        """Close the SSH connection"""
+        if self.client:
+            self.client.close()
+
+
+def print_section(title: str):
+    """Print a formatted section header"""
+    print(f"\n{'=' * 80}")
+    print(f"{title}")
+    print("=" * 80)
+
+
+def save_latest_pod_id(pod_id: str):
+    """Save pod ID to .latest_pod file"""
+    try:
+        latest_pod_file = Path(".latest_pod")
+        latest_pod_file.write_text(pod_id)
+        print(f"   Saved pod ID to .latest_pod file")
+    except Exception as e:
+        print(f"   Warning: Could not save pod ID to .latest_pod: {e}")
+
+
+def get_latest_pod_id() -> Optional[str]:
+    """Read pod ID from .latest_pod file if it exists"""
+    try:
+        latest_pod_file = Path(".latest_pod")
+        if latest_pod_file.exists():
+            pod_id = latest_pod_file.read_text().strip()
+            if pod_id:
+                return pod_id
+    except Exception as e:
+        print(f"   Warning: Could not read .latest_pod file: {e}")
+    return None
+
+
+@hydra.main(version_base=None, config_path="config", config_name="config")
+def main(cfg: DictConfig):
+    """Main entry point for RunPod CLI Dashboard"""
+
+    # Get API key from environment
+    api_key = os.environ.get("RUNPOD_API_KEY")
+    if not api_key:
+        print("ERROR: RUNPOD_API_KEY not set in environment")
+        sys.exit(1)
+
+    print_section("RunPod CLI Dashboard")
+
+    # Initialize RunPod client
+    client = RunPodClient(api_key, cfg.runpod.api_url)
+
+    # Step 1: Get or create pod
+    pod_id = cfg.runpod.target_pod_id
+
+    if not pod_id or pod_id == "null":
+        # Check if reuse is enabled and there's a latest pod
+        if cfg.runpod.reuse:
+            latest_pod_id = get_latest_pod_id()
+            if latest_pod_id:
+                print(f"\n1. Checking if latest pod {latest_pod_id} is available...")
+                existing_pod = client.get_pod(latest_pod_id)
+                if existing_pod and existing_pod.get("runtime"):
+                    print(f"   Latest pod {latest_pod_id} is available and running!")
+                    print(f"   Reusing existing pod instead of creating a new one.")
+                    pod_id = latest_pod_id
+                else:
+                    print(
+                        f"   Latest pod {latest_pod_id} is not available or not running."
+                    )
+                    print(f"   Will create a new pod.")
+
+        # Create new pod if we don't have one yet
+        if not pod_id or pod_id == "null":
+            print(
+                f"\n1. Creating new pod with A40 GPU and template {cfg.runpod.template_id}"
+            )
+            pod_id = client.create_pod(
+                template_id=cfg.runpod.template_id,
+                name=cfg.runpod.pod_name,
+                gpu_type_id=cfg.runpod.gpu_type_id,
+                app_port=cfg.runpod.app_port,
+                volume_gb=cfg.runpod.volume_in_gb,
+                container_disk_gb=cfg.runpod.container_disk_in_gb,
+                volume_mount=cfg.runpod.volume_mount_path,
+            )
+
+            if not pod_id:
+                print("ERROR: Failed to create pod")
+                sys.exit(1)
+
+            print(f"   Pod created successfully! ID: {pod_id}")
+
+            # Save the new pod ID to .latest_pod file
+            save_latest_pod_id(pod_id)
+
+            # Wait for pod to be ready
+            if not client.wait_for_pod_ready(pod_id, cfg.runpod.startup_wait):
+                print("ERROR: Pod failed to start in time")
+                sys.exit(1)
+    else:
+        print(f"\n1. Using existing pod: {pod_id}")
+
+    # Step 2: Get pod details
+    print(f"\n2. Fetching pod information...")
+    pod = client.get_pod(pod_id)
+
+    if not pod:
+        print(f"ERROR: Pod {pod_id} not found")
+        sys.exit(1)
+
+    print(f"   Pod Name: {pod['name']}")
+    print(f"   Pod ID: {pod['id']}")
+
+    if not pod.get("runtime"):
+        print("   ERROR: Pod is not running")
+        sys.exit(1)
+
+    # Extract connection information
+    ports = pod["runtime"]["ports"]
+    ssh_port = None
+    http_port = None
+
+    print(f"\n   Available Ports:")
+    for port in ports:
+        print(
+            f"   - Type: {port['type']}, IP: {port['ip']}, Port: {port['publicPort']}, Public: {port['isIpPublic']}"
+        )
+        if port["type"] == "tcp" and port["privatePort"] == 22:
+            ssh_port = port
+        elif port["type"] == "http" and port["privatePort"] == cfg.runpod.app_port:
+            http_port = port
+
+    print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
+
+    # Step 3: SSH Connection and execute command
+    if not ssh_port:
+        print("\n3. ERROR: No SSH port found for this pod")
+        sys.exit(1)
+
+    # Wait for SSH to be fully ready (especially for newly created pods)
+    uptime = pod["runtime"]["uptimeInSeconds"]
+    if uptime < 60:
+        wait_time = 60 - uptime
+        print(
+            f"\n   Pod is very new (uptime: {uptime}s), waiting {wait_time}s for SSH to initialize..."
+        )
+        time.sleep(wait_time)
+
+    print(f"\n3. Connecting to SSH: {ssh_port['ip']}:{ssh_port['publicPort']}")
+    ssh = SSHConnection(
+        host=ssh_port["ip"],
+        port=ssh_port["publicPort"],
+        username=cfg.runpod.ssh.username,
+        timeout=cfg.runpod.ssh.timeout,
+    )
+
+    if not ssh.connect():
+        print("ERROR: Failed to connect via SSH")
+        sys.exit(1)
+
+    print(f"\n4. Launching HTTP server on port {cfg.runpod.app_port}...")
+    stdout, stderr = ssh.execute_command(cfg.runpod.remote_command, background=True)
+
+    print("\n   Command Output:")
+    print("   " + "=" * 76)
+    for line in stdout.split("\n"):
+        if line.strip():
+            print(f"   {line}")
+
+    if stderr:
+        print("\n   Errors:")
+        print("   " + "=" * 76)
+        for line in stderr.split("\n"):
+            if line.strip():
+                print(f"   {line}")
+
+    # Give the server a moment to fully start
+    print("\n   Waiting for HTTP server to initialize...")
+    time.sleep(5)
+
+    ssh.close()
+
+    # Step 4: Get public URL and open in browser
+    # Use RunPod's proxy URL format: https://{pod_id}-{port}.proxy.runpod.net/
+    app_url = f"https://{pod_id}-{cfg.runpod.app_port}.proxy.runpod.net/"
+    print(f"\n5. Pod HTTP Endpoint: {app_url}")
+
+    print(f"\n6. Opening {app_url} in browser...")
+    try:
+        webbrowser.open(app_url)
+        print("   Browser opened successfully!")
+    except Exception as e:
+        print(f"   Failed to open browser: {e}")
+        print(f"   Please manually open: {app_url}")
+
+    print_section("Done!")
+    print(f"\nPod ID: {pod_id}")
+    print("Remember to stop/delete the pod when you're done to avoid charges!")
+
+
+if __name__ == "__main__":
+    main()

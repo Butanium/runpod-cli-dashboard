@@ -1,0 +1,51 @@
+# RunPod Configuration
+runpod:
+  # GPU type for pod (use GPU type ID from RunPod)
+  gpu_type_id: "NVIDIA A40"
+
+  # Template ID for the pod
+  template_id: "l1usydkydn"
+
+  # Pod name prefix
+  pod_name: "runpod-cli-dashboard"
+
+  # Target pod ID (if using existing pod, set to null to create new pod)
+  target_pod_id: null
+
+  # Reuse last created pod if available (default: true)
+  reuse: true
+
+  # Exposed port for the application
+  app_port: 8501
+
+  # Storage settings (in GB)
+  volume_in_gb: 100
+  container_disk_in_gb: 200
+  volume_mount_path: "/workspace"
+
+  # SSH settings
+  ssh:
+    username: "root"
+    timeout: 30
+
+  # Command to run on the pod (starts a simple HTTP server on port 8501)
+  remote_command: |
+    nohup python3 -c "
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b'<html><body><h1>Hello from RunPod!</h1><p>This server is running on port 8501</p></body></html>')
+        def log_message(self, format, *args):
+            pass
+    HTTPServer(('0.0.0.0', 8501), Handler).serve_forever()
+    " > /tmp/http_server.log 2>&1 &
+    echo 'HTTP server started on port 8501'
+
+  # Wait time for pod to start (seconds)
+  startup_wait: 180
+
+  # API endpoint
+  api_url: "https://api.runpod.io/graphql"

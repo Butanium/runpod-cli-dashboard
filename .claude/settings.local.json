@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.runpod.io)",
+      "Bash(curl:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(python:*)",
+      "Bash(uv add:*)",
+      "Bash(uv run:*)",
+      "WebFetch(domain:graphql-spec.runpod.io)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
