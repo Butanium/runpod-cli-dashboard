@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import webbrowser
+import codecs
 from typing import Dict, Optional
 from pathlib import Path
 import requests
@@ -185,7 +186,7 @@ class RunPodClient:
               gpuTypeId: "{gpu_type_id}"
               name: "{name}"
               templateId: "{template_id}"
-              ports: "22/tcp,{app_port}/http"
+              ports: "22/tcp,{app_port}/tcp"
               volumeInGb: {volume_gb}
               containerDiskInGb: {container_disk_gb}
               volumeMountPath: "{volume_mount}"
@@ -346,7 +347,7 @@ class SSHConnection:
         self.timeout = timeout
         self.client = None
 
-    def connect(self, max_retries: int = 30) -> bool:
+    def connect(self, pod_id: str, max_retries: int = 30) -> bool:
         """Connect to the SSH server with retries"""
         for attempt in range(max_retries):
             try:
@@ -367,7 +368,7 @@ class SSHConnection:
                 print(f"  Connected to {self.host}:{self.port}")
                 return True
             except Exception as e:
-                print(f"  SSH connection attempt {attempt + 1} failed: {e}")
+                print(f"  SSH connection attempt {attempt + 1} failed, feel free to check the pod logs online if needed: https://console.runpod.io/pods?id={pod_id}: {e}")
                 if attempt < max_retries - 1:
                     time.sleep(15)  # Wait longer between retries
                 else:
@@ -400,19 +401,19 @@ class SSHConnection:
             self.client.close()
 
 
-def check_http_server_running(pod_id: str, app_port: int, timeout: int = 5) -> bool:
+def check_http_server_running(ip: str, public_port: int, timeout: int = 5) -> bool:
     """
-    Check if HTTP server is responding on RunPod proxy URL.
+    Check if HTTP server is responding on direct TCP connection.
 
     Args:
-        pod_id: RunPod pod ID
-        app_port: Application port number
+        ip: Public IP address
+        public_port: Public port number
         timeout: Request timeout in seconds
 
     Returns:
         True if server responds with 2xx/3xx status, False otherwise
     """
-    url = f"https://{pod_id}-{app_port}.proxy.runpod.net/"
+    url = f"http://{ip}:{public_port}/"
     try:
         response = requests.get(url, timeout=timeout)
         return response.status_code < 400
@@ -497,15 +498,16 @@ def stream_tmux_output(ssh: SSHConnection, log_file: str):
     print(f"\nStreaming output from {log_file} (press Ctrl+C to stop)...")
     print("=" * 80)
 
-    # Start tail -f command
     command = f"tail -f {log_file}"
     channel = ssh.client.get_transport().open_session()
     channel.exec_command(command)
 
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+
     try:
         while True:
             if channel.recv_ready():
-                data = channel.recv(1024).decode("utf-8")
+                data = decoder.decode(channel.recv(1024), final=False)
                 print(data, end="", flush=True)
             time.sleep(0.1)
     except KeyboardInterrupt:
@@ -780,6 +782,7 @@ def main(cfg: DictConfig):
     # Extract connection information
     ports = pod["runtime"]["ports"]
     ssh_port = None
+    app_port_info = None
 
     print("\n   Available Ports:")
     for port in ports:
@@ -788,6 +791,8 @@ def main(cfg: DictConfig):
         )
         if port["type"] == "tcp" and port["privatePort"] == 22:
             ssh_port = port
+        if port["type"] == "tcp" and port["privatePort"] == cfg.app_port:
+            app_port_info = port
 
     print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
 
@@ -804,7 +809,7 @@ def main(cfg: DictConfig):
         timeout=cfg.ssh.timeout,
     )
 
-    if not ssh.connect():
+    if not ssh.connect(pod_id):
         print("ERROR: Failed to connect via SSH")
         sys.exit(1)
 
@@ -814,7 +819,11 @@ def main(cfg: DictConfig):
 
     # Check if tmux session already exists and if HTTP server is running
     tmux_exists = check_tmux_session_exists(ssh, session_name)
-    http_running = check_http_server_running(pod_id, cfg.app_port)
+    http_running = False
+    if app_port_info:
+        http_running = check_http_server_running(
+            app_port_info["ip"], app_port_info["publicPort"]
+        )
 
     print("\n4. Checking existing session and server status...")
     print(
@@ -848,8 +857,13 @@ def main(cfg: DictConfig):
         time.sleep(5)
 
     # Step 4: Get public URL and open in browser
-    # Use RunPod's proxy URL format: https://{pod_id}-{port}.proxy.runpod.net/
-    app_url = f"https://{pod_id}-{cfg.app_port}.proxy.runpod.net/"
+    if not app_port_info:
+        print(f"\nERROR: No TCP port found for app port {cfg.app_port}")
+        ssh.close()
+        sys.exit(1)
+
+    # Use direct TCP connection: http://{ip}:{publicPort}/
+    app_url = f"http://{app_port_info['ip']}:{app_port_info['publicPort']}/"
     print(f"\n6. Pod HTTP Endpoint: {app_url}")
 
     print(f"\n7. Opening {app_url} in browser...")

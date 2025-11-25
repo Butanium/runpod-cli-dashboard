@@ -5,8 +5,10 @@ defaults:
 
 
 remote_command: |
-  bash -c 'git clone https://github.com/science-of-finetuning/diffing-toolkit/
+  source ~/.bashrc
+  cd /workspace
+  git clone https://github.com/science-of-finetuning/diffing-toolkit/
   cd diffing-toolkit
   git checkout weight-ampl-debug
-  uv sync --extra vllm
-  uv run streamlit run dashboard.py'
+  uv sync --all-extras
+  uv run streamlit run dashboard.py

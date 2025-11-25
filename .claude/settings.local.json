@@ -9,7 +9,8 @@
       "Bash(uv add:*)",
       "Bash(uv run:*)",
       "WebFetch(domain:graphql-spec.runpod.io)",
-      "Bash(dir /b:*)"
+      "Bash(dir /b:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []
