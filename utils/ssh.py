@@ -1,8 +1,11 @@
 """SSH connection and tmux management utilities"""
 
+import os
+import re
 import time
 import codecs
 import paramiko
+from pathlib import Path
 
 
 class SSHConnection:
@@ -162,3 +165,65 @@ def stream_tmux_output(ssh: SSHConnection, log_file: str):
         print("\n" + "=" * 80)
         print("Stopped streaming output")
         channel.close()
+
+
+def update_ssh_config(pod_name: str, host: str, port: int, username: str = "root") -> bool:
+    """
+    Add or update an SSH config entry for a pod.
+
+    Args:
+        pod_name: Name to use as the Host alias in SSH config
+        host: Hostname or IP address
+        port: SSH port number
+        username: SSH username (default: root)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    ssh_config_path = Path.home() / ".ssh" / "config"
+
+    # Ensure .ssh directory exists
+    ssh_dir = ssh_config_path.parent
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+
+    # Create the new config entry
+    new_entry = f"""Host {pod_name}
+    HostName {host}
+    User {username}
+    Port {port}
+    ForwardAgent yes
+    StrictHostKeyChecking no
+    UserKnownHostsFile=/dev/null
+"""
+
+    try:
+        # Read existing config if it exists
+        existing_config = ""
+        if ssh_config_path.exists():
+            existing_config = ssh_config_path.read_text()
+
+        # Check if entry already exists for this pod name
+        # Pattern matches "Host {pod_name}" followed by config until next "Host " or end
+        pattern = rf"Host {re.escape(pod_name)}\s*\n(?:[ \t]+[^\n]+\n)*"
+
+        if re.search(pattern, existing_config):
+            # Replace existing entry
+            updated_config = re.sub(pattern, new_entry, existing_config)
+        else:
+            # Append new entry
+            if existing_config and not existing_config.endswith("\n"):
+                existing_config += "\n"
+            updated_config = existing_config + "\n" + new_entry
+
+        # Write updated config
+        ssh_config_path.write_text(updated_config)
+
+        # Set proper permissions on Unix systems
+        if os.name != "nt":
+            os.chmod(ssh_config_path, 0o600)
+
+        return True
+
+    except Exception as e:
+        print(f"   Warning: Failed to update SSH config: {e}")
+        return False

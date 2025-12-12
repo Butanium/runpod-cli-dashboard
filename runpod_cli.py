@@ -19,6 +19,7 @@ from utils.ssh import (
     kill_tmux_session,
     create_tmux_session_with_logging,
     stream_tmux_output,
+    update_ssh_config,
 )
 from utils.config import get_or_prompt_user, save_latest_pod_id, get_latest_pod_id
 from utils.utils import print_section, check_http_server_running
@@ -220,6 +221,16 @@ def main(cfg: DictConfig):
             app_port_info = port
 
     print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
+
+    # Update SSH config file with pod connection details
+    if ssh_port:
+        if update_ssh_config(
+            pod_name=pod["name"],
+            host=ssh_port["ip"],
+            port=ssh_port["publicPort"],
+            username=cfg.ssh.username,
+        ):
+            print(f"\n   SSH config updated - connect with: ssh {pod['name']}")
 
     # Step 3: SSH Connection and execute command
     if not ssh_port:
