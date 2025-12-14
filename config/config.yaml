@@ -3,8 +3,14 @@
 # GPU type for pod (use GPU type ID from RunPod)
 gpu_type_id: "NVIDIA A40"
 
+# Number of GPUs to request
+ngpus: 1
+
 # Template ID for the pod
 template_id: "l1usydkydn"
+
+# Cloud type for pod creation. null means "do not enforce" (let RunPod decide).
+cloud_type: null
 
 # Pod name prefix
 pod_name: "runpod-cli-dashboard"

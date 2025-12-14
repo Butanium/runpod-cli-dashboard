@@ -5,10 +5,75 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
+import difflib
+import re
 import requests
 
 from utils.config import get_latest_pod_id
 from utils.utils import print_section
+
+
+def _escape_gql_string(value: str) -> str:
+    # GraphQL string literal escaping for our usage in f-strings.
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _normalize_for_match(s: str) -> str:
+    # Normalize for human-ish fuzzy matching: casefold, drop punctuation to spaces.
+    s = s.casefold()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+
+def _suggest_gpu_type_ids(given: str, valid_ids: list[str], k: int = 5) -> list[str]:
+    assert isinstance(given, str)
+    assert isinstance(valid_ids, list)
+    assert all(isinstance(x, str) for x in valid_ids)
+
+    given_n = _normalize_for_match(given)
+    valid_norm = {_normalize_for_match(x): x for x in valid_ids}
+
+    # If normalization matches exactly, that's a strong "did you mean".
+    if given_n in valid_norm:
+        return [valid_norm[given_n]]
+
+    # Otherwise fall back to similarity scoring on normalized strings.
+    candidates = list(valid_norm.keys())
+    close = difflib.get_close_matches(given_n, candidates, n=k, cutoff=0.0)
+    return [valid_norm[c] for c in close[:k]]
+
+
+def _merge_env_kv_list(
+    template_env: list[dict], overrides: dict[str, str]
+) -> list[dict]:
+    """
+    Merge template env list with overrides/additions.
+    - preserves template order
+    - overrides existing keys
+    - appends new keys at the end
+    """
+    assert isinstance(template_env, list)
+    assert all(isinstance(x, dict) for x in template_env)
+    assert isinstance(overrides, dict)
+
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    for item in template_env:
+        key = item["key"]
+        value = item.get("value", "")
+        assert isinstance(key, str)
+        assert isinstance(value, str)
+        if key in overrides:
+            value = overrides[key]
+        out.append({"key": key, "value": value})
+        seen.add(key)
+
+    for key, value in overrides.items():
+        if key not in seen:
+            out.append({"key": key, "value": value})
+
+    return out
 
 
 class RunPodClient:
@@ -17,6 +82,7 @@ class RunPodClient:
     def __init__(self, api_key: str, api_url: str):
         self.api_key = api_key
         self.api_url = api_url
+        self._gpu_types_cache: list[dict] | None = None
 
     def _graphql_query(self, query: str) -> Dict:
         """Execute a GraphQL query against RunPod API"""
@@ -35,6 +101,53 @@ class RunPodClient:
                 f"Response: {response.text if 'response' in locals() else 'No response'}"
             )
             raise
+
+
+    def get_gpu_types(self) -> list[dict]:
+        """
+        Return the list of available RunPod GPU types.
+        This is used to validate gpu_type_id values early with a helpful error.
+        """
+        if self._gpu_types_cache is not None:
+            return self._gpu_types_cache
+
+        query = """
+        query {
+          gpuTypes {
+            id
+            displayName
+            memoryInGb
+          }
+        }
+        """
+        result = self._graphql_query(query)
+        gpu_types = result["data"]["gpuTypes"]
+        assert isinstance(gpu_types, list)
+        self._gpu_types_cache = gpu_types
+        return gpu_types
+
+    def get_template_env_kv(self, template_id: str) -> list[dict]:
+        """
+        Return template env as a list of {key, value} dicts.
+        """
+        template_id_escaped = _escape_gql_string(template_id)
+        query = f"""
+        query {{
+          podTemplate(id: "{template_id_escaped}") {{
+            env {{
+              key
+              value
+            }}
+          }}
+        }}
+        """
+        result = self._graphql_query(query)
+        data = result["data"]["podTemplate"]
+        env = (data or {}).get("env") or []
+        assert isinstance(env, list)
+        for item in env:
+            assert set(item.keys()) >= {"key", "value"}
+        return env
 
     def get_pod(self, pod_id: str) -> Optional[Dict]:
         """Get details for a specific pod including GPU type and status"""
@@ -84,13 +197,30 @@ class RunPodClient:
         template_id: str,
         name: str,
         gpu_type_id: str,
+        ngpus: int,
         app_port: int,
         volume_gb: int,
         container_disk_gb: int,
         volume_mount: str,
+        cloud_type: str | None = None,
     ) -> Optional[str]:
         """Create a new on-demand pod"""
-        print(f"Creating pod with template {template_id}, GPU: {gpu_type_id}")
+        valid_gpu_ids = [g["id"] for g in self.get_gpu_types()]
+        if gpu_type_id not in valid_gpu_ids:
+            suggestions = _suggest_gpu_type_ids(gpu_type_id, valid_gpu_ids, k=5)
+            print(f"ERROR: Unknown gpu_type_id: {gpu_type_id!r}")
+            if suggestions:
+                print(f"Did you mean: {suggestions[0]!r}")
+                if len(suggestions) > 1:
+                    print("Other close matches:")
+                    for s in suggestions[1:]:
+                        print(f"  - {s}")
+            print("\nValid gpu_type_id values are:")
+            for gid in valid_gpu_ids:
+                print(f"  - {gid}")
+            return None
+
+        print(f"Creating pod with template {template_id}, GPU: {gpu_type_id}, Count: {ngpus}")
         print(f"   Volume: {volume_gb}GB, Container Disk: {container_disk_gb}GB")
 
         # Get SSH public keys from account
@@ -101,20 +231,34 @@ class RunPodClient:
             print("   WARNING: No SSH keys found in account")
 
         # Build env variables
-        env_vars = []
         if ssh_keys:
-            # Escape the SSH keys for JSON
-            escaped_keys = ssh_keys.replace('"', '\\"').replace("\n", "\\n")
-            env_vars.append(f'{{key: "PUBLIC_KEY", value: "{escaped_keys}"}}')
+            # IMPORTANT: RunPod treats `env` in deploy input as a full replacement,
+            # so to be additive we must merge with the template env first.
+            template_env = self.get_template_env_kv(template_id)
+            merged_env = _merge_env_kv_list(
+                template_env=template_env,
+                overrides={"PUBLIC_KEY": ssh_keys},
+            )
+            env_vars = [
+                f'{{key: "{_escape_gql_string(item["key"])}", value: "{_escape_gql_string(item["value"])}"}}'
+                for item in merged_env
+            ]
+            env_string = f"env: [{', '.join(env_vars)}]"
+            print(f"   Env variables: {[item['key'] for item in merged_env]}")
+        else:
+            env_string = ""
 
-        env_string = f"env: [{', '.join(env_vars)}]" if env_vars else ""
+        cloud_type_string = ""
+        if cloud_type is not None:
+            assert cloud_type in {"SECURE", "COMMUNITY"}, cloud_type
+            cloud_type_string = f"cloudType: {cloud_type}"
 
         mutation = f"""
         mutation {{
           podFindAndDeployOnDemand(
             input: {{
-              cloudType: SECURE
-              gpuCount: 1
+              {cloud_type_string}
+              gpuCount: {ngpus}
               gpuTypeId: "{gpu_type_id}"
               name: "{name}"
               templateId: "{template_id}"

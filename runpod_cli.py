@@ -164,11 +164,13 @@ def main(cfg: DictConfig):
             # Prefix pod name with username
             pod_name = f"{user_name}-{cfg.pod_name}"
 
-            print(f"\n1. Creating new pod with A40 GPU and template {cfg.template_id}")
+            print(f"\n1. Creating new pod with {cfg.ngpus}x {cfg.gpu_type_id} GPU(s) and template {cfg.template_id}")
             pod_id = client.create_pod(
                 template_id=cfg.template_id,
                 name=pod_name,
                 gpu_type_id=cfg.gpu_type_id,
+                ngpus=cfg.ngpus,
+                cloud_type=cfg.cloud_type,
                 app_port=cfg.app_port,
                 volume_gb=cfg.volume_in_gb,
                 container_disk_gb=cfg.container_disk_in_gb,
