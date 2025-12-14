@@ -120,8 +120,9 @@ def create_tmux_session_with_logging(
         True if successful, False otherwise
     """
     # Create the tmux session
+    # Use -i flag for interactive shell so .bashrc doesn't exit early
     escaped_command = command.replace("'", "'\\''")
-    create_cmd = f"tmux new-session -d -s {session_name} bash -c '{escaped_command}'"
+    create_cmd = f"tmux new-session -d -s {session_name} bash -i -c '{escaped_command}'"
     _stdout, stderr = ssh.execute_command(create_cmd)
 
     if stderr:
