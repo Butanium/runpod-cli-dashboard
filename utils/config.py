@@ -8,6 +8,21 @@ import yaml
 USER_CONFIG_FILE = Path(__file__).parent.parent / ".user.yaml"
 
 
+def load_user_config() -> dict:
+    """Load user config from .user.yaml"""
+    if USER_CONFIG_FILE.exists():
+        with open(USER_CONFIG_FILE, "r") as f:
+            config = yaml.safe_load(f)
+            return config if config else {}
+    return {}
+
+
+def save_user_config(config: dict):
+    """Save user config to .user.yaml"""
+    with open(USER_CONFIG_FILE, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+
+
 def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
     """Get username from CLI override, .user.yaml, or prompt user"""
 
@@ -20,14 +35,9 @@ def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
         return username
 
     # Try loading from .user.yaml
-    if USER_CONFIG_FILE.exists():
-        try:
-            with open(USER_CONFIG_FILE, "r") as f:
-                config = yaml.safe_load(f)
-                if config and "name" in config:
-                    return config["name"]
-        except Exception as e:
-            print(f"Warning: Could not read {USER_CONFIG_FILE}: {e}")
+    config = load_user_config()
+    if "name" in config and config["name"]:
+        return config["name"]
 
     # Interactive prompt
     print("\n" + "=" * 80)
@@ -52,15 +62,71 @@ def get_or_prompt_user(cli_override: Optional[str] = None) -> str:
             continue
 
         # Save to .user.yaml
-        try:
-            with open(USER_CONFIG_FILE, "w") as f:
-                yaml.dump({"name": username}, f, default_flow_style=False)
-            print(f"\nUser identity saved to {USER_CONFIG_FILE}")
+        config["name"] = username
+        save_user_config(config)
+        print(f"\nUser identity saved to {USER_CONFIG_FILE}")
+        print("=" * 80 + "\n")
+        return username
+
+
+def get_git_config() -> tuple[Optional[str], Optional[str]]:
+    """Get git name and email from .user.yaml, prompting if not set"""
+    config = load_user_config()
+
+    git_name = config.get("git_name")
+    git_email = config.get("git_email")
+
+    # If both are set, return them
+    if git_name and git_email:
+        return git_name, git_email
+
+    # If already skipped (both are explicitly None), return None
+    if git_name is None and git_email is None and "git_name" in config:
+        return None, None
+
+    # Prompt for git configuration
+    print("\n" + "=" * 80)
+    print("Git Configuration Setup (Optional)")
+    print("=" * 80)
+    print("\nTo commit on pods, you can configure your git identity.")
+    print("This is optional - press Enter to skip.")
+    print("You can always edit .user.yaml later to add these settings.")
+
+    # Prompt for git name if not set
+    if not git_name:
+        git_name = input("\nEnter your git name (e.g., 'John Doe') [optional]: ").strip()
+        if not git_name:
+            print("\nSkipping git configuration.")
+            print(f"You can add git_name and git_email to {USER_CONFIG_FILE} later if needed.")
             print("=" * 80 + "\n")
-            return username
-        except Exception as e:
-            print(f"ERROR: Could not save user config: {e}")
-            sys.exit(1)
+            # Save None values to indicate user was prompted and skipped
+            config["git_name"] = None
+            config["git_email"] = None
+            save_user_config(config)
+            return None, None
+
+    # Prompt for git email if not set
+    if not git_email:
+        git_email = input("Enter your git email (e.g., 'john@example.com') [optional]: ").strip()
+        if not git_email:
+            print("\nSkipping git configuration.")
+            print(f"You can add git_name and git_email to {USER_CONFIG_FILE} later if needed.")
+            print("=" * 80 + "\n")
+            # Save None values to indicate user was prompted and skipped
+            config["git_name"] = None
+            config["git_email"] = None
+            save_user_config(config)
+            return None, None
+
+    # Save to config
+    config["git_name"] = git_name
+    config["git_email"] = git_email
+    save_user_config(config)
+    
+    print(f"\nGit configuration saved to {USER_CONFIG_FILE}")
+    print("=" * 80 + "\n")
+    
+    return git_name, git_email
 
 
 def save_latest_pod_id(pod_id: str):

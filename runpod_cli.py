@@ -20,8 +20,9 @@ from utils.ssh import (
     create_tmux_session_with_logging,
     stream_tmux_output,
     update_ssh_config,
+    configure_git,
 )
-from utils.config import get_or_prompt_user, save_latest_pod_id, get_latest_pod_id
+from utils.config import get_or_prompt_user, save_latest_pod_id, get_latest_pod_id, get_git_config
 from utils.utils import print_section, check_http_server_running
 
 # Load environment variables
@@ -248,6 +249,15 @@ def main(cfg: DictConfig):
     if not ssh.connect(pod_id):
         print("ERROR: Failed to connect via SSH")
         sys.exit(1)
+
+    # Configure git on the pod
+    git_name, git_email = get_git_config()
+    if git_name and git_email:
+        print(f"\n   Configuring git with name='{git_name}' and email='{git_email}'...")
+        if configure_git(ssh, git_name, git_email):
+            print("   Git configured successfully!")
+        else:
+            print("   Warning: Failed to configure git")
 
     # Format tmux session name and log file with pod_id
     session_name = cfg.tmux_session_name.replace("{pod_id}", pod_id)

@@ -168,6 +168,32 @@ def stream_tmux_output(ssh: SSHConnection, log_file: str):
         channel.close()
 
 
+def configure_git(ssh: SSHConnection, git_name: str, git_email: str) -> bool:
+    """
+    Configure git user.name and user.email on the remote pod.
+
+    Args:
+        ssh: SSH connection to remote host
+        git_name: Git user name to configure
+        git_email: Git user email to configure
+
+    Returns:
+        True if successful, False otherwise
+    """
+    commands = [
+        f'git config --global user.name "{git_name}"',
+        f'git config --global user.email "{git_email}"'
+    ]
+    
+    for command in commands:
+        _stdout, stderr = ssh.execute_command(command)
+        if stderr:
+            print(f"   Warning: Git config command failed: {stderr}")
+            return False
+    
+    return True
+
+
 def update_ssh_config(pod_name: str, host: str, port: int, username: str = "root") -> bool:
     """
     Add or update an SSH config entry for a pod.

@@ -3,3 +3,8 @@
 # This file is gitignored - each user should have their own
 
 name: "your-username"  # lowercase, alphanumeric (hyphens/underscores allowed)
+
+# Git configuration (optional) - for committing on pods
+# Set to null or omit to skip
+git_name: "Your Name" 
+git_email: "your.email@example.com"
