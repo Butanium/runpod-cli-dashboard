@@ -10,6 +10,7 @@ remote_command: |
   git clone https://github.com/science-of-finetuning/diffing-toolkit/
   cd diffing-toolkit
   git pull
-  git checkout weight-ampl-debug
+  git checkout ui-responsivness
+  git pull
   uv sync --all-extras
   uv run streamlit run dashboard.py
