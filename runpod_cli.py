@@ -27,6 +27,7 @@ from utils.config import (
     save_latest_pod_id,
     get_latest_pod_id,
     get_git_config,
+    get_hf_token,
 )
 from utils.utils import print_section, check_http_server_running
 
@@ -46,6 +47,9 @@ def main(cfg: DictConfig):
 
     # Get or prompt for user identity
     user_name = get_or_prompt_user(cfg.get("user_name"))
+
+    # Get HF token (will prompt if not set)
+    hf_token = get_hf_token()
 
     print_section("RunPod CLI Dashboard")
     print(f"User: {user_name}")
@@ -182,6 +186,7 @@ def main(cfg: DictConfig):
                 volume_gb=cfg.volume_in_gb,
                 container_disk_gb=cfg.container_disk_in_gb,
                 volume_mount=cfg.volume_mount_path,
+                hf_token=hf_token,
             )
 
             if not pod_id:

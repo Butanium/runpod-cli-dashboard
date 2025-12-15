@@ -202,6 +202,7 @@ class RunPodClient:
         container_disk_gb: int,
         volume_mount: str,
         cloud_type: str | None = None,
+        hf_token: str | None = None,
     ) -> Optional[str]:
         """Create a new on-demand pod"""
         valid_gpu_ids = [g["id"] for g in self.get_gpu_types()]
@@ -232,13 +233,21 @@ class RunPodClient:
             print("   WARNING: No SSH keys found in account")
 
         # Build env variables
+        template_env = self.get_template_env_kv(template_id)
+        overrides = {}
+
         if ssh_keys:
+            overrides["PUBLIC_KEY"] = ssh_keys
+
+        if hf_token:
+            overrides["HF_TOKEN"] = hf_token
+
+        if overrides:
             # IMPORTANT: RunPod treats `env` in deploy input as a full replacement,
             # so to be additive we must merge with the template env first.
-            template_env = self.get_template_env_kv(template_id)
             merged_env = _merge_env_kv_list(
                 template_env=template_env,
-                overrides={"PUBLIC_KEY": ssh_keys},
+                overrides=overrides,
             )
             env_vars = [
                 f'{{key: "{_escape_gql_string(item["key"])}", value: "{_escape_gql_string(item["value"])}"}}'

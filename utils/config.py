@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import yaml
+from huggingface_hub import get_token as hf_get_token
 
 USER_CONFIG_FILE = Path(__file__).parent.parent / ".user.yaml"
 
@@ -134,6 +135,54 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
     print("=" * 80 + "\n")
 
     return git_name, git_email
+
+
+def get_hf_token() -> Optional[str]:
+    """Get Hugging Face token from .user.yaml, prompting if not set"""
+    config = load_user_config()
+
+    hf_token = config.get("hf_token")
+
+    if hf_token:
+        return hf_token
+
+    if hf_token is None and "hf_token" in config:
+        return None
+
+    print("\n" + "=" * 80)
+    print("Hugging Face Token Setup (Optional)")
+    print("=" * 80)
+    print("\nTo access private models or datasets, you can configure your HF token.")
+    print("This is optional - press Enter to skip.")
+    print("Type 'd' to use your default token from ~/.huggingface/token")
+    print("You can always edit .user.yaml later to add this setting.")
+
+    user_input = input(
+        "\nEnter your Hugging Face token [optional, 'd' for default]: "
+    ).strip()
+
+    if not user_input:
+        print("\nSkipping Hugging Face token.")
+        print(f"You can add hf_token to {USER_CONFIG_FILE} later if needed.")
+        print("=" * 80 + "\n")
+        config["hf_token"] = None
+        save_user_config(config)
+        return None
+
+    if user_input.lower() == "d":
+        hf_token = hf_get_token()
+        assert hf_token is not None, "Default HF token not found. Please login with 'huggingface-cli login' first."
+        print("\nUsing default token from Hugging Face CLI")
+    else:
+        hf_token = user_input
+
+    config["hf_token"] = hf_token
+    save_user_config(config)
+
+    print(f"\nHugging Face token saved to {USER_CONFIG_FILE}")
+    print("=" * 80 + "\n")
+
+    return hf_token
 
 
 def save_latest_pod_id(pod_id: str):
