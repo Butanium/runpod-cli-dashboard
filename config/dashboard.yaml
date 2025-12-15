@@ -11,6 +11,5 @@ remote_command: |
   cd diffing-toolkit
   git pull
   git checkout ui-responsivness
-  git pull
   uv sync --all-extras
   uv run streamlit run dashboard.py
