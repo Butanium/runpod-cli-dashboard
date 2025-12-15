@@ -3,6 +3,9 @@ outputs/
 .latest_pod
 .user.yaml
 
+# claude
+.claude
+
 # Python-generated files
 __pycache__/
 *.py[oc]
