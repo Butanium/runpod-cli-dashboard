@@ -81,8 +81,12 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
         return git_name, git_email
 
     # If already skipped (both are explicitly None in config), don't prompt again
-    if (git_name is None and "git_name" in config and 
-        git_email is None and "git_email" in config):
+    if (
+        git_name is None
+        and "git_name" in config
+        and git_email is None
+        and "git_email" in config
+    ):
         return None, None
 
     # Prompt for git configuration
@@ -95,7 +99,9 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
 
     # Prompt for git name if not set
     if not git_name:
-        git_name = input("\nEnter your git name (e.g., 'John Doe') [optional]: ").strip()
+        git_name = input(
+            "\nEnter your git name (e.g., 'John Doe') [optional]: "
+        ).strip()
         if not git_name:
             print("\nSkipping git name.")
             print(f"You can add git_name to {USER_CONFIG_FILE} later if needed.")
@@ -107,7 +113,9 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
 
     # Prompt for git email if not set
     if not git_email:
-        git_email = input("Enter your git email (e.g., 'john@example.com') [optional]: ").strip()
+        git_email = input(
+            "Enter your git email (e.g., 'john@example.com') [optional]: "
+        ).strip()
         if not git_email:
             print("\nSkipping git email.")
             print(f"You can add git_email to {USER_CONFIG_FILE} later if needed.")
@@ -121,10 +129,10 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
     config["git_name"] = git_name
     config["git_email"] = git_email
     save_user_config(config)
-    
+
     print(f"\nGit configuration saved to {USER_CONFIG_FILE}")
     print("=" * 80 + "\n")
-    
+
     return git_name, git_email
 
 

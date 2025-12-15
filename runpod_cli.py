@@ -22,7 +22,12 @@ from utils.ssh import (
     update_ssh_config,
     configure_git,
 )
-from utils.config import get_or_prompt_user, save_latest_pod_id, get_latest_pod_id, get_git_config
+from utils.config import (
+    get_or_prompt_user,
+    save_latest_pod_id,
+    get_latest_pod_id,
+    get_git_config,
+)
 from utils.utils import print_section, check_http_server_running
 
 # Load environment variables
@@ -164,7 +169,9 @@ def main(cfg: DictConfig):
             # Prefix pod name with username
             pod_name = f"{user_name}-{cfg.pod_name}"
 
-            print(f"\n1. Creating new pod with {cfg.ngpus}x {cfg.gpu_type_id} GPU(s) and template {cfg.template_id}")
+            print(
+                f"\n1. Creating new pod with {cfg.ngpus}x {cfg.gpu_type_id} GPU(s) and template {cfg.template_id}"
+            )
             pod_id = client.create_pod(
                 template_id=cfg.template_id,
                 name=pod_name,

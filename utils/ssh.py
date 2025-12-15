@@ -39,7 +39,9 @@ class SSHConnection:
                 print(f"  Connected to {self.host}:{self.port}")
                 return True
             except Exception as e:
-                print(f"  SSH connection attempt {attempt + 1} failed, feel free to check the pod logs online if needed: https://console.runpod.io/pods?id={pod_id}: {e}")
+                print(
+                    f"  SSH connection attempt {attempt + 1} failed, feel free to check the pod logs online if needed: https://console.runpod.io/pods?id={pod_id}: {e}"
+                )
                 if attempt < max_retries - 1:
                     time.sleep(15)  # Wait longer between retries
                 else:
@@ -182,19 +184,21 @@ def configure_git(ssh: SSHConnection, git_name: str, git_email: str) -> bool:
     """
     commands = [
         f'git config --global user.name "{git_name}"',
-        f'git config --global user.email "{git_email}"'
+        f'git config --global user.email "{git_email}"',
     ]
-    
+
     for command in commands:
         _stdout, stderr = ssh.execute_command(command)
         if stderr:
             print(f"   Warning: Git config command failed: {stderr}")
             return False
-    
+
     return True
 
 
-def update_ssh_config(pod_name: str, host: str, port: int, username: str = "root") -> bool:
+def update_ssh_config(
+    pod_name: str, host: str, port: int, username: str = "root"
+) -> bool:
     """
     Add or update an SSH config entry for a pod.
 

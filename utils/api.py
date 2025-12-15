@@ -102,7 +102,6 @@ class RunPodClient:
             )
             raise
 
-
     def get_gpu_types(self) -> list[dict]:
         """
         Return the list of available RunPod GPU types.
@@ -220,7 +219,9 @@ class RunPodClient:
                 print(f"  - {gid}")
             return None
 
-        print(f"Creating pod with template {template_id}, GPU: {gpu_type_id}, Count: {ngpus}")
+        print(
+            f"Creating pod with template {template_id}, GPU: {gpu_type_id}, Count: {ngpus}"
+        )
         print(f"   Volume: {volume_gb}GB, Container Disk: {container_disk_gb}GB")
 
         # Get SSH public keys from account
