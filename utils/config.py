@@ -80,8 +80,9 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
     if git_name and git_email:
         return git_name, git_email
 
-    # If already skipped (both are explicitly None), return None
-    if git_name is None and git_email is None and "git_name" in config:
+    # If already skipped (both are explicitly None in config), don't prompt again
+    if (git_name is None and "git_name" in config and 
+        git_email is None and "git_email" in config):
         return None, None
 
     # Prompt for git configuration
@@ -96,27 +97,25 @@ def get_git_config() -> tuple[Optional[str], Optional[str]]:
     if not git_name:
         git_name = input("\nEnter your git name (e.g., 'John Doe') [optional]: ").strip()
         if not git_name:
-            print("\nSkipping git configuration.")
-            print(f"You can add git_name and git_email to {USER_CONFIG_FILE} later if needed.")
+            print("\nSkipping git name.")
+            print(f"You can add git_name to {USER_CONFIG_FILE} later if needed.")
             print("=" * 80 + "\n")
-            # Save None values to indicate user was prompted and skipped
+            # Save None value to indicate user was prompted and skipped
             config["git_name"] = None
-            config["git_email"] = None
             save_user_config(config)
-            return None, None
+            return None, git_email
 
     # Prompt for git email if not set
     if not git_email:
         git_email = input("Enter your git email (e.g., 'john@example.com') [optional]: ").strip()
         if not git_email:
-            print("\nSkipping git configuration.")
-            print(f"You can add git_name and git_email to {USER_CONFIG_FILE} later if needed.")
+            print("\nSkipping git email.")
+            print(f"You can add git_email to {USER_CONFIG_FILE} later if needed.")
             print("=" * 80 + "\n")
-            # Save None values to indicate user was prompted and skipped
-            config["git_name"] = None
+            # Save None value to indicate user was prompted and skipped
             config["git_email"] = None
             save_user_config(config)
-            return None, None
+            return git_name, None
 
     # Save to config
     config["git_name"] = git_name
