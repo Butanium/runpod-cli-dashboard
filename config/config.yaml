@@ -1,7 +1,7 @@
 # RunPod Configuration
 
 # GPU type for pod (use GPU type ID from RunPod)
-gpu_type_id: "NVIDIA A40"
+gpu_type: "NVIDIA A40"
 
 # Number of GPUs to request
 ngpus: 1

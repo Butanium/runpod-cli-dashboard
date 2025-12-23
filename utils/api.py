@@ -25,7 +25,7 @@ def _normalize_for_match(s: str) -> str:
     return " ".join(s.split())
 
 
-def _suggest_gpu_type_ids(given: str, valid_ids: list[str], k: int = 5) -> list[str]:
+def _suggest_gpu_types(given: str, valid_ids: list[str], k: int = 5) -> list[str]:
     assert isinstance(given, str)
     assert isinstance(valid_ids, list)
     assert all(isinstance(x, str) for x in valid_ids)
@@ -105,7 +105,7 @@ class RunPodClient:
     def get_gpu_types(self) -> list[dict]:
         """
         Return the list of available RunPod GPU types.
-        This is used to validate gpu_type_id values early with a helpful error.
+        This is used to validate gpu_type values early with a helpful error.
         """
         if self._gpu_types_cache is not None:
             return self._gpu_types_cache
@@ -195,7 +195,7 @@ class RunPodClient:
         self,
         template_id: str,
         name: str,
-        gpu_type_id: str,
+        gpu_type: str,
         ngpus: int,
         app_port: int,
         volume_gb: int,
@@ -206,22 +206,22 @@ class RunPodClient:
     ) -> Optional[str]:
         """Create a new on-demand pod"""
         valid_gpu_ids = [g["id"] for g in self.get_gpu_types()]
-        if gpu_type_id not in valid_gpu_ids:
-            suggestions = _suggest_gpu_type_ids(gpu_type_id, valid_gpu_ids, k=5)
-            print(f"ERROR: Unknown gpu_type_id: {gpu_type_id!r}")
+        if gpu_type not in valid_gpu_ids:
+            suggestions = _suggest_gpu_types(gpu_type, valid_gpu_ids, k=5)
+            print(f"ERROR: Unknown gpu_type: {gpu_type!r}")
             if suggestions:
                 print(f"Did you mean: {suggestions[0]!r}")
                 if len(suggestions) > 1:
                     print("Other close matches:")
                     for s in suggestions[1:]:
                         print(f"  - {s}")
-            print("\nValid gpu_type_id values are:")
+            print("\nValid gpu_type values are:")
             for gid in valid_gpu_ids:
                 print(f"  - {gid}")
             return None
 
         print(
-            f"Creating pod with template {template_id}, GPU: {gpu_type_id}, Count: {ngpus}"
+            f"Creating pod with template {template_id}, GPU: {gpu_type}, Count: {ngpus}"
         )
         print(f"   Volume: {volume_gb}GB, Container Disk: {container_disk_gb}GB")
 
@@ -269,7 +269,7 @@ class RunPodClient:
             input: {{
               {cloud_type_string}
               gpuCount: {ngpus}
-              gpuTypeId: "{gpu_type_id}"
+              gpuTypeId: "{gpu_type}"
               name: "{name}"
               templateId: "{template_id}"
               ports: "22/tcp,{app_port}/tcp"

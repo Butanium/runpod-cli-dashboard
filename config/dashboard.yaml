@@ -6,10 +6,7 @@ defaults:
 
 remote_command: |
   source ~/.bashrc
-  cd /workspace
-  git clone https://github.com/science-of-finetuning/diffing-toolkit/
-  cd diffing-toolkit
+  cd /workspace/diffing-toolkit
   git pull
   git checkout ui-responsivness
-  uv sync --all-extras
   uv run streamlit run dashboard.py

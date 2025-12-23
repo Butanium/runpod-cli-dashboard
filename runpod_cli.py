@@ -84,7 +84,7 @@ def main(cfg: DictConfig):
                         pod_gpu_type = existing_pod.get("machine", {}).get(
                             "gpuTypeId", ""
                         )
-                        desired_gpu_type = cfg.gpu_type_id
+                        desired_gpu_type = cfg.gpu_type
 
                         if pod_gpu_type == desired_gpu_type:
                             # GPU matches, resume the pod
@@ -174,12 +174,12 @@ def main(cfg: DictConfig):
             pod_name = f"{user_name}-{cfg.pod_name}"
 
             print(
-                f"\n1. Creating new pod with {cfg.ngpus}x {cfg.gpu_type_id} GPU(s) and template {cfg.template_id}"
+                f"\n1. Creating new pod with {cfg.ngpus}x {cfg.gpu_type} GPU(s) and template {cfg.template_id}"
             )
             pod_id = client.create_pod(
                 template_id=cfg.template_id,
                 name=pod_name,
-                gpu_type_id=cfg.gpu_type_id,
+                gpu_type=cfg.gpu_type,
                 ngpus=cfg.ngpus,
                 cloud_type=cfg.cloud_type,
                 app_port=cfg.app_port,
