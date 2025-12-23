@@ -1,0 +1,2 @@
+gpu_type: "NVIDIA A40"
+ngpus: 1

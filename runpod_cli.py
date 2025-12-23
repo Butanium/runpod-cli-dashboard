@@ -35,7 +35,7 @@ from utils.utils import print_section, check_http_server_running
 load_dotenv()
 
 
-@hydra.main(version_base=None, config_path="config", config_name="dashboard")
+@hydra.main(version_base=None, config_path="config", config_name="default")
 def main(cfg: DictConfig):
     """Main entry point for RunPod CLI Dashboard"""
 

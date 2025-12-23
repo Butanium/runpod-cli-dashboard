@@ -1,0 +1,49 @@
+# RunPod Configuration
+
+defaults:
+  - gpu: a40
+  - storage: default
+  - task: dashboard
+  - _self_
+
+# Template ID for the pod
+template_id: "runpod-torch-v240"
+
+# Cloud type for pod creation. null means "do not enforce" (let RunPod decide).
+cloud_type: null
+
+# Pod name prefix
+pod_name: "runpod-cli-dashboard"
+
+# Target pod ID (if using existing pod, set to null to create new pod)
+target_pod_id: null
+
+# Reuse last created pod if available (default: true)
+reuse: true
+
+# Exposed port for the application
+app_port: 8501
+
+# Volume mount path
+volume_mount_path: "/workspace"
+
+# SSH settings
+ssh:
+  username: "root"
+  timeout: 30
+
+# TMux settings
+tmux_session_name: "dashboard"
+tmux_log_file: "/tmp/dashboard.log"
+
+# Stream command output to terminal (default: true)
+stream_output: true
+
+# Restart command even if tmux session already exists (default: false)
+restart_command: false
+
+# Wait time for pod to start (seconds)
+startup_wait: 360
+
+# API endpoint
+api_url: "https://api.runpod.io/graphql"

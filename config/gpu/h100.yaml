@@ -1,0 +1,2 @@
+gpu_type: "NVIDIA H100 80GB HBM3"
+ngpus: 1

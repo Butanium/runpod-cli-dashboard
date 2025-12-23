@@ -1,0 +1,2 @@
+gpu_type: "NVIDIA A100 80GB PCIe"
+ngpus: 2
