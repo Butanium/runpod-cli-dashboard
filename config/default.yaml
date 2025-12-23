@@ -4,10 +4,8 @@ defaults:
   - gpu: a40
   - storage: default
   - task: dashboard
+  - ide: cursor
   - _self_
-
-# Template ID for the pod
-template_id: "runpod-torch-v240"
 
 # Cloud type for pod creation. null means "do not enforce" (let RunPod decide).
 cloud_type: null
@@ -38,6 +36,7 @@ tmux_log_file: "/tmp/dashboard.log"
 
 # Stream command output to terminal (default: true)
 stream_output: true
+open_ide: true
 
 # Restart command even if tmux session already exists (default: false)
 restart_command: false

@@ -1,4 +1,7 @@
 # Command to run on the pod (starts a simple HTTP server on port 8501)
+template_id: "runpod-torch-v240"
+
+project_path: "/workspace"
 remote_command: |
   nohup python3 -c "
   from http.server import HTTPServer, BaseHTTPRequestHandler

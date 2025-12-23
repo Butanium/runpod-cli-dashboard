@@ -1,8 +1,9 @@
 template_id: "l1usydkydn"
 
+project_path: "/workspace/diffing-toolkit"
 remote_command: |
   source ~/.bashrc
-  cd /workspace/diffing-toolkit
+  cd ${.project_path}
   git pull
   git checkout ui-responsivness
   uv run streamlit run dashboard.py

@@ -84,7 +84,7 @@ def main(cfg: DictConfig):
                         pod_gpu_type = existing_pod.get("machine", {}).get(
                             "gpuTypeId", ""
                         )
-                        desired_gpu_type = cfg.gpu_type
+                        desired_gpu_type = cfg.gpu.type
 
                         if pod_gpu_type == desired_gpu_type:
                             # GPU matches, resume the pod
@@ -174,17 +174,17 @@ def main(cfg: DictConfig):
             pod_name = f"{user_name}-{cfg.pod_name}"
 
             print(
-                f"\n1. Creating new pod with {cfg.ngpus}x {cfg.gpu_type} GPU(s) and template {cfg.template_id}"
+                f"\n1. Creating new pod with {cfg.gpu.n}x {cfg.gpu.type} GPU(s) and template {cfg.task.template_id}"
             )
             pod_id = client.create_pod(
-                template_id=cfg.template_id,
+                template_id=cfg.task.template_id,
                 name=pod_name,
-                gpu_type=cfg.gpu_type,
-                ngpus=cfg.ngpus,
+                gpu_type=cfg.gpu.type,
+                ngpus=cfg.gpu.n,
                 cloud_type=cfg.cloud_type,
                 app_port=cfg.app_port,
-                volume_gb=cfg.volume_in_gb,
-                container_disk_gb=cfg.container_disk_in_gb,
+                volume_gb=cfg.storage.volume_in_gb,
+                container_disk_gb=cfg.storage.container_disk_in_gb,
                 volume_mount=cfg.volume_mount_path,
                 hf_token=hf_token,
             )
@@ -246,6 +246,11 @@ def main(cfg: DictConfig):
             username=cfg.ssh.username,
         ):
             print(f"\n   SSH config updated - connect with: ssh {pod['name']}")
+            if cfg.open_ide:
+                print(f"   Opening IDE with command: {cfg.ide.command.format(ssh_config_name=pod['name'])}")
+                os.system(cfg.ide.command.format(ssh_config_name=pod["name"]))
+        elif cfg.open_ide:
+            print("ERROR: Can't open IDE because SSH config file is not updated")
 
     # Step 3: SSH Connection and execute command
     if not ssh_port:
@@ -304,7 +309,7 @@ def main(cfg: DictConfig):
     if should_start_command:
         print(f"\n5. Starting HTTP server in tmux session '{session_name}'...")
         success = create_tmux_session_with_logging(
-            ssh, session_name, cfg.remote_command, log_file
+            ssh, session_name, cfg.task.remote_command, log_file
         )
 
         if not success:

@@ -6,7 +6,7 @@ import time
 import codecs
 import paramiko
 from pathlib import Path
-
+from loguru import logger
 
 class SSHConnection:
     """Handle SSH connections to RunPod instances"""
@@ -85,9 +85,12 @@ def check_tmux_session_exists(ssh: SSHConnection, session_name: str) -> bool:
     Returns:
         True if session exists, False otherwise
     """
-    command = f"tmux has-session -t {session_name} 2>/dev/null && echo exists"
-    stdout, _stderr = ssh.execute_command(command)
-    return "exists" in stdout
+    command = f"tmux has-session -t {session_name} && echo foo_bar_exists"
+    stdout, stderr = ssh.execute_command(command)
+    result = "foo_bar_exists" in stdout
+    if not result:
+        logger.info(f"Tmux session {session_name} does not exist:\n====STDOUT====\n{stdout}\n====STDERR====\n{stderr}")
+    return result
 
 
 def kill_tmux_session(ssh: SSHConnection, session_name: str) -> bool:
@@ -197,7 +200,11 @@ def configure_git(ssh: SSHConnection, git_name: str, git_email: str) -> bool:
 
 
 def update_ssh_config(
-    pod_name: str, host: str, port: int, username: str = "root"
+    pod_name: str,
+    host: str,
+    port: int,
+    username: str = "root",
+    ssh_dir: None | str = None,
 ) -> bool:
     """
     Add or update an SSH config entry for a pod.
@@ -211,11 +218,13 @@ def update_ssh_config(
     Returns:
         True if successful, False otherwise
     """
-    ssh_config_path = Path.home() / ".ssh" / "config"
+    ssh_dir = ssh_dir or Path.home() / ".ssh"
+    if isinstance(ssh_dir, str):
+        ssh_dir = Path(ssh_dir)
 
     # Ensure .ssh directory exists
-    ssh_dir = ssh_config_path.parent
     ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    ssh_config_path = ssh_dir / "config"
 
     # Create the new config entry
     new_entry = f"""Host {pod_name}
@@ -224,8 +233,7 @@ def update_ssh_config(
     Port {port}
     ForwardAgent yes
     StrictHostKeyChecking no
-    UserKnownHostsFile=/dev/null
-"""
+    UserKnownHostsFile=/dev/null\n"""
 
     try:
         # Read existing config if it exists

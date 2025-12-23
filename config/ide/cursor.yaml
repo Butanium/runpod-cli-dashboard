@@ -1,0 +1,4 @@
+defaults:
+  - vscode
+
+ide_name: "cursor"

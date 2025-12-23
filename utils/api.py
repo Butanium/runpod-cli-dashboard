@@ -310,7 +310,7 @@ class RunPodClient:
                 return True
 
             elapsed = int(time.time() - start_time)
-            print(f"  [{elapsed}s] Still waiting for pod to initialize...")
+            print(f"  [{elapsed}s] Still waiting for pod to initialize... More info at: https://console.runpod.io/pods?id={pod_id}")
             time.sleep(10)
 
         print(f"Timeout waiting for pod {pod_id}")
