@@ -171,7 +171,9 @@ def get_hf_token() -> Optional[str]:
 
     if user_input.lower() == "d":
         hf_token = hf_get_token()
-        assert hf_token is not None, "Default HF token not found. Please login with 'huggingface-cli login' first."
+        assert (
+            hf_token is not None
+        ), "Default HF token not found. Please login with 'huggingface-cli login' first."
         print("\nUsing default token from Hugging Face CLI")
     else:
         hf_token = user_input

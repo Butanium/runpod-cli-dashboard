@@ -8,6 +8,7 @@ import paramiko
 from pathlib import Path
 from loguru import logger
 
+
 class SSHConnection:
     """Handle SSH connections to RunPod instances"""
 
@@ -89,7 +90,9 @@ def check_tmux_session_exists(ssh: SSHConnection, session_name: str) -> bool:
     stdout, stderr = ssh.execute_command(command)
     result = "foo_bar_exists" in stdout
     if not result:
-        logger.info(f"Tmux session {session_name} does not exist:\n====STDOUT====\n{stdout}\n====STDERR====\n{stderr}")
+        logger.info(
+            f"Tmux session {session_name} does not exist:\n====STDOUT====\n{stdout}\n====STDERR====\n{stderr}"
+        )
     return result
 
 

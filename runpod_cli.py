@@ -247,7 +247,9 @@ def main(cfg: DictConfig):
         ):
             print(f"\n   SSH config updated - connect with: ssh {pod['name']}")
             if cfg.open_ide:
-                print(f"   Opening IDE with command: {cfg.ide.command.format(ssh_config_name=pod['name'])}")
+                print(
+                    f"   Opening IDE with command: {cfg.ide.command.format(ssh_config_name=pod['name'])}"
+                )
                 os.system(cfg.ide.command.format(ssh_config_name=pod["name"]))
         elif cfg.open_ide:
             print("ERROR: Can't open IDE because SSH config file is not updated")
@@ -345,7 +347,10 @@ def main(cfg: DictConfig):
 
     ssh.close()
 
-    print_section(f"Configuration complete! The dashboard is still running at {app_url} and your pod is still running (and charging you money)")
+    print_section(
+        f"Configuration complete! The dashboard is still running at {app_url} and your pod is still running (and charging you money)"
+    )
     print(f"Pod ID: {pod_id}")
-    print(f"Remember to stop/delete the pod when you're done with `uv run runpod_cli destroy` or check the console at https://console.runpod.io/pods?id={pod_id}!")
-
+    print(
+        f"Remember to stop/delete the pod when you're done with `uv run runpod_cli destroy` or check the console at https://console.runpod.io/pods?id={pod_id}!"
+    )
