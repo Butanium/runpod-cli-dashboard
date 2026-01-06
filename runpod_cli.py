@@ -354,3 +354,14 @@ def main(cfg: DictConfig):
     print(
         f"Remember to stop/delete the pod when you're done with `uv run runpod_cli destroy` or check the console at https://console.runpod.io/pods?id={pod_id}!"
     )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "destroy":
+            destroy_pod()
+            exit(0)
+        elif sys.argv[1] in ["pause", "stop"]:
+            pause_pod()
+            exit(0)
+    main()
