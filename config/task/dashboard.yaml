@@ -5,5 +5,4 @@ remote_command: |
   source ~/.bashrc
   cd ${.project_path}
   git pull
-  git checkout ui-responsivness
   uv run streamlit run dashboard.py
