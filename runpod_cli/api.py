@@ -1,4 +1,4 @@
-"""RunPod API client and command handlers"""
+"""RunPod API client and command handlers."""
 
 import os
 import sys
@@ -9,8 +9,8 @@ import difflib
 import re
 import requests
 
-from utils.config import get_latest_pod_id
-from utils.utils import print_section
+from runpod_cli.config import get_api_key, get_latest_pod_id
+from runpod_cli.utils import print_section
 
 
 def _escape_gql_string(value: str) -> str:
@@ -46,8 +46,8 @@ def _suggest_gpu_types(given: str, valid_ids: list[str], k: int = 5) -> list[str
 def _merge_env_kv_list(
     template_env: list[dict], overrides: dict[str, str]
 ) -> list[dict]:
-    """
-    Merge template env list with overrides/additions.
+    """Merge template env list with overrides/additions.
+
     - preserves template order
     - overrides existing keys
     - appends new keys at the end
@@ -77,7 +77,7 @@ def _merge_env_kv_list(
 
 
 class RunPodClient:
-    """Client for interacting with RunPod API"""
+    """Client for interacting with RunPod API."""
 
     def __init__(self, api_key: str, api_url: str):
         self.api_key = api_key
@@ -85,7 +85,7 @@ class RunPodClient:
         self._gpu_types_cache: list[dict] | None = None
 
     def _graphql_query(self, query: str) -> Dict:
-        """Execute a GraphQL query against RunPod API"""
+        """Execute a GraphQL query against RunPod API."""
         try:
             response = requests.post(
                 f"{self.api_url}?api_key={self.api_key}",
@@ -103,8 +103,8 @@ class RunPodClient:
             raise
 
     def get_gpu_types(self) -> list[dict]:
-        """
-        Return the list of available RunPod GPU types.
+        """Return the list of available RunPod GPU types.
+
         This is used to validate gpu_type values early with a helpful error.
         """
         if self._gpu_types_cache is not None:
@@ -126,9 +126,7 @@ class RunPodClient:
         return gpu_types
 
     def get_template_env_kv(self, template_id: str) -> list[dict]:
-        """
-        Return template env as a list of {key, value} dicts.
-        """
+        """Return template env as a list of {key, value} dicts."""
         template_id_escaped = _escape_gql_string(template_id)
         query = f"""
         query {{
@@ -149,7 +147,7 @@ class RunPodClient:
         return env
 
     def get_pod(self, pod_id: str) -> Optional[Dict]:
-        """Get details for a specific pod including GPU type and status"""
+        """Get details for a specific pod including GPU type and status."""
         query = f"""
         query Pod {{
           pod(input: {{podId: "{pod_id}"}}) {{
@@ -178,7 +176,7 @@ class RunPodClient:
         return None
 
     def get_user_ssh_keys(self) -> Optional[str]:
-        """Get user's SSH public keys from RunPod account"""
+        """Get user's SSH public keys from RunPod account."""
         query = """
         query {
           myself {
@@ -203,8 +201,10 @@ class RunPodClient:
         volume_mount: str,
         cloud_type: str | None = None,
         hf_token: str | None = None,
+        extra_env: dict[str, str] | None = None,
+        docker_args: str | None = None,
     ) -> Optional[str]:
-        """Create a new on-demand pod"""
+        """Create a new on-demand pod."""
         valid_gpu_ids = [g["id"] for g in self.get_gpu_types()]
         if gpu_type not in valid_gpu_ids:
             suggestions = _suggest_gpu_types(gpu_type, valid_gpu_ids, k=5)
@@ -242,6 +242,9 @@ class RunPodClient:
         if hf_token:
             overrides["HF_TOKEN"] = hf_token
 
+        if extra_env:
+            overrides.update(extra_env)
+
         if overrides:
             # IMPORTANT: RunPod treats `env` in deploy input as a full replacement,
             # so to be additive we must merge with the template env first.
@@ -263,6 +266,11 @@ class RunPodClient:
             assert cloud_type in {"SECURE", "COMMUNITY"}, cloud_type
             cloud_type_string = f"cloudType: {cloud_type}"
 
+        docker_args_string = ""
+        if docker_args:
+            docker_args_string = f'dockerArgs: "{_escape_gql_string(docker_args)}"'
+            print(f"   Docker args: {docker_args[:100]}...")
+
         mutation = f"""
         mutation {{
           podFindAndDeployOnDemand(
@@ -277,6 +285,7 @@ class RunPodClient:
               containerDiskInGb: {container_disk_gb}
               volumeMountPath: "{volume_mount}"
               {env_string}
+              {docker_args_string}
             }}
           ) {{
             id
@@ -299,7 +308,7 @@ class RunPodClient:
         return None
 
     def wait_for_pod_ready(self, pod_id: str, timeout: int = 300) -> bool:
-        """Wait for pod to be ready and have runtime with ports"""
+        """Wait for pod to be ready and have runtime with ports."""
         print(f"Waiting for pod {pod_id} to be ready (timeout: {timeout}s)...")
         start_time = time.time()
 
@@ -319,8 +328,8 @@ class RunPodClient:
         return False
 
     def stop_pod(self, pod_id: str) -> bool:
-        """
-        Stop a running pod without deleting it.
+        """Stop a running pod without deleting it.
+
         The pod can be resumed later to avoid GPU search and initialization time.
         """
         print(f"Stopping pod {pod_id}...")
@@ -344,8 +353,8 @@ class RunPodClient:
         return True
 
     def resume_pod(self, pod_id: str, gpu_count: int = 1) -> bool:
-        """
-        Resume a stopped pod.
+        """Resume a stopped pod.
+
         Returns True if successful, False otherwise.
         """
         print(f"Resuming pod {pod_id}...")
@@ -373,8 +382,8 @@ class RunPodClient:
         return True
 
     def list_pods(self) -> list:
-        """
-        List all pods for the current user.
+        """List all pods for the current user.
+
         Returns list of pod dictionaries with id, name, machine.gpuTypeId, and desiredStatus.
         """
         query = """
@@ -406,7 +415,7 @@ class RunPodClient:
         return []
 
     def terminate_pod(self, pod_id: str) -> bool:
-        """Terminate/delete a pod"""
+        """Terminate/delete a pod."""
         print(f"Terminating pod {pod_id}...")
 
         mutation = f"""
@@ -426,18 +435,17 @@ class RunPodClient:
 
 
 def pause_pod():
-    """Pause (stop) the latest pod without deleting it"""
+    """Pause (stop) the latest pod without deleting it."""
     print_section("RunPod Pause")
 
-    api_key = os.environ.get("RUNPOD_API_KEY")
+    api_key = get_api_key()
     if not api_key:
-        print("ERROR: RUNPOD_API_KEY not set in environment")
+        print("ERROR: RUNPOD_API_KEY not set. Run 'runpod-cli config' or set the environment variable.")
         sys.exit(1)
 
     pod_id = get_latest_pod_id()
     if not pod_id:
-        print("ERROR: No pod found in .latest_pod file")
-        print("Cannot determine which pod to pause")
+        print("ERROR: No pod ID saved. Cannot determine which pod to pause.")
         sys.exit(1)
 
     print(f"Found pod ID: {pod_id}")
@@ -454,18 +462,17 @@ def pause_pod():
 
 
 def destroy_pod():
-    """Shutdown the latest pod"""
+    """Shutdown the latest pod."""
     print_section("RunPod Shutdown")
 
-    api_key = os.environ.get("RUNPOD_API_KEY")
+    api_key = get_api_key()
     if not api_key:
-        print("ERROR: RUNPOD_API_KEY not set in environment")
+        print("ERROR: RUNPOD_API_KEY not set. Run 'runpod-cli config' or set the environment variable.")
         sys.exit(1)
 
     pod_id = get_latest_pod_id()
     if not pod_id:
-        print("ERROR: No pod found in .latest_pod file")
-        print("Cannot determine which pod to shutdown")
+        print("ERROR: No pod ID saved. Cannot determine which pod to shutdown.")
         sys.exit(1)
 
     print(f"Found pod ID: {pod_id}")
@@ -475,7 +482,8 @@ def destroy_pod():
 
     if client.terminate_pod(pod_id):
         print(f"\nSuccessfully shut down pod {pod_id}")
-        Path(".latest_pod").unlink(missing_ok=True)
+        from runpod_cli.config import LATEST_POD_FILE
+        LATEST_POD_FILE.unlink(missing_ok=True)
     else:
         print(f"\nFailed to shut down pod {pod_id}")
         sys.exit(1)

@@ -1,4 +1,4 @@
-"""SSH connection and tmux management utilities"""
+"""SSH connection and tmux management utilities."""
 
 import os
 import re
@@ -10,7 +10,7 @@ from loguru import logger
 
 
 class SSHConnection:
-    """Handle SSH connections to RunPod instances"""
+    """Handle SSH connections to RunPod instances."""
 
     def __init__(self, host: str, port: int, username: str, timeout: int = 30):
         self.host = host
@@ -20,7 +20,7 @@ class SSHConnection:
         self.client = None
 
     def connect(self, pod_id: str, max_retries: int = 30) -> bool:
-        """Connect to the SSH server with retries"""
+        """Connect to the SSH server with retries."""
         for attempt in range(max_retries):
             try:
                 self.client = paramiko.SSHClient()
@@ -51,7 +51,7 @@ class SSHConnection:
         return False
 
     def execute_command(self, command: str, background: bool = False) -> tuple:
-        """Execute a command and return stdout, stderr"""
+        """Execute a command and return stdout, stderr."""
         if not self.client:
             raise Exception("Not connected to SSH server")
 
@@ -70,14 +70,13 @@ class SSHConnection:
             return stdout_str, stderr_str
 
     def close(self):
-        """Close the SSH connection"""
+        """Close the SSH connection."""
         if self.client:
             self.client.close()
 
 
 def check_tmux_session_exists(ssh: SSHConnection, session_name: str) -> bool:
-    """
-    Check if a tmux session exists.
+    """Check if a tmux session exists.
 
     Args:
         ssh: SSH connection to remote host
@@ -97,8 +96,7 @@ def check_tmux_session_exists(ssh: SSHConnection, session_name: str) -> bool:
 
 
 def kill_tmux_session(ssh: SSHConnection, session_name: str) -> bool:
-    """
-    Kill a tmux session.
+    """Kill a tmux session.
 
     Args:
         ssh: SSH connection to remote host
@@ -115,8 +113,7 @@ def kill_tmux_session(ssh: SSHConnection, session_name: str) -> bool:
 def create_tmux_session_with_logging(
     ssh: SSHConnection, session_name: str, command: str, log_file: str
 ) -> bool:
-    """
-    Create a new tmux session and configure it to log output to a file.
+    """Create a new tmux session and configure it to log output to a file.
 
     Args:
         ssh: SSH connection to remote host
@@ -148,8 +145,7 @@ def create_tmux_session_with_logging(
 
 
 def stream_tmux_output(ssh: SSHConnection, log_file: str):
-    """
-    Stream tmux log file output to terminal. Blocking until Ctrl+C.
+    """Stream tmux log file output to terminal. Blocking until Ctrl+C.
 
     Args:
         ssh: SSH connection to remote host
@@ -177,8 +173,7 @@ def stream_tmux_output(ssh: SSHConnection, log_file: str):
 
 
 def configure_git(ssh: SSHConnection, git_name: str, git_email: str) -> bool:
-    """
-    Configure git user.name and user.email on the remote pod.
+    """Configure git user.name and user.email on the remote pod.
 
     Args:
         ssh: SSH connection to remote host
@@ -209,8 +204,7 @@ def update_ssh_config(
     username: str = "root",
     ssh_dir: None | str = None,
 ) -> bool:
-    """
-    Add or update an SSH config entry for a pod.
+    """Add or update an SSH config entry for a pod.
 
     Args:
         pod_name: Name to use as the Host alias in SSH config

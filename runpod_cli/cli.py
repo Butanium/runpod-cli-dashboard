@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""
-RunPod CLI Dashboard
-Creates a pod, connects via SSH, launches HTTP server, and opens in browser
+"""RunPod CLI Dashboard.
+
+Creates a pod, connects via SSH, launches HTTP server, and opens in browser.
 """
 
 import os
@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 import hydra
 from omegaconf import DictConfig
 
-from utils.api import RunPodClient, pause_pod, destroy_pod
-from utils.ssh import (
+from runpod_cli.api import RunPodClient, pause_pod, destroy_pod
+from runpod_cli.ssh import (
     SSHConnection,
     check_tmux_session_exists,
     kill_tmux_session,
@@ -22,33 +22,52 @@ from utils.ssh import (
     update_ssh_config,
     configure_git,
 )
-from utils.config import (
+from runpod_cli.config import (
     get_or_prompt_user,
+    get_api_key,
     save_latest_pod_id,
     get_latest_pod_id,
     get_git_config,
     get_hf_token,
+    run_setup,
 )
-from utils.utils import print_section, check_http_server_running
-
-# Load environment variables
-load_dotenv()
+from runpod_cli.utils import print_section, check_http_server_running, wait_for_http_ready
 
 
-@hydra.main(version_base=None, config_path="config", config_name="default")
+def entry_point():
+    """CLI entry point registered in pyproject.toml."""
+    load_dotenv()
+
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        if cmd == "destroy":
+            destroy_pod()
+            return
+        if cmd in ("pause", "stop"):
+            pause_pod()
+            return
+        if cmd == "config":
+            sys.argv.pop(1)  # remove "config" so hydra doesn't see it
+            run_setup(first_time=False)
+            return
+
+    main()
+
+
+@hydra.main(version_base=None, config_path="hydra_config", config_name="default")
 def main(cfg: DictConfig):
-    """Main entry point for RunPod CLI Dashboard"""
+    """Main entry point for RunPod CLI Dashboard."""
 
-    # Get API key from environment
-    api_key = os.environ.get("RUNPOD_API_KEY")
+    # Get API key
+    api_key = get_api_key()
     if not api_key:
-        print("ERROR: RUNPOD_API_KEY not set in environment")
+        print("ERROR: RUNPOD_API_KEY not set. Run 'runpod-cli config' or set the environment variable.")
         sys.exit(1)
 
     # Get or prompt for user identity
     user_name = get_or_prompt_user(cfg.get("user_name"))
 
-    # Get HF token (will prompt if not set)
+    # Get HF token
     hf_token = get_hf_token()
 
     print_section("RunPod CLI Dashboard")
@@ -56,6 +75,15 @@ def main(cfg: DictConfig):
 
     # Initialize RunPod client
     client = RunPodClient(api_key, cfg.api_url)
+
+    # Determine task type
+    has_remote_command = "remote_command" in cfg.task
+    docker_args = cfg.task.get("docker_args")
+
+    # Build extra env vars for pod creation
+    extra_env = {}
+    if cfg.task.get("dynamic_lora"):
+        extra_env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "True"
 
     # Step 1: Get or create pod
     pod_id = cfg.target_pod_id
@@ -187,6 +215,8 @@ def main(cfg: DictConfig):
                 container_disk_gb=cfg.storage.container_disk_in_gb,
                 volume_mount=cfg.volume_mount_path,
                 hf_token=hf_token,
+                extra_env=extra_env if extra_env else None,
+                docker_args=docker_args,
             )
 
             if not pod_id:
@@ -195,7 +225,7 @@ def main(cfg: DictConfig):
 
             print(f"   Pod created successfully! ID: {pod_id}")
 
-            # Save the new pod ID to .latest_pod file
+            # Save the new pod ID
             save_latest_pod_id(pod_id)
 
             # Wait for pod to be ready
@@ -237,7 +267,7 @@ def main(cfg: DictConfig):
 
     print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
 
-    # Update SSH config file with pod connection details
+    # Update SSH config file with pod connection details (no SSH connection needed)
     if ssh_port:
         if update_ssh_config(
             pod_name=pod["name"],
@@ -254,79 +284,95 @@ def main(cfg: DictConfig):
         elif cfg.open_ide:
             print("ERROR: Can't open IDE because SSH config file is not updated")
 
-    # Step 3: SSH Connection and execute command
-    if not ssh_port:
-        print("\n3. ERROR: No SSH port found for this pod")
-        sys.exit(1)
+    # Step 3: SSH Connection / Server readiness
+    ssh = None
 
-    print(f"\n3. Connecting to SSH: {ssh_port['ip']}:{ssh_port['publicPort']}")
-    ssh = SSHConnection(
-        host=ssh_port["ip"],
-        port=ssh_port["publicPort"],
-        username=cfg.ssh.username,
-        timeout=cfg.ssh.timeout,
-    )
-
-    if not ssh.connect(pod_id):
-        print("ERROR: Failed to connect via SSH")
-        sys.exit(1)
-
-    # Configure git on the pod
-    git_name, git_email = get_git_config()
-    if git_name and git_email:
-        print(f"\n   Configuring git with name='{git_name}' and email='{git_email}'...")
-        if configure_git(ssh, git_name, git_email):
-            print("   Git configured successfully!")
-        else:
-            print("   Warning: Failed to configure git")
-
-    # Format tmux session name and log file with pod_id
-    session_name = cfg.tmux_session_name.replace("{pod_id}", pod_id)
-    log_file = cfg.tmux_log_file.replace("{pod_id}", pod_id)
-
-    # Check if tmux session already exists and if HTTP server is running
-    tmux_exists = check_tmux_session_exists(ssh, session_name)
-    http_running = False
-    if app_port_info:
-        http_running = check_http_server_running(
-            app_port_info["ip"], app_port_info["publicPort"]
-        )
-
-    print("\n4. Checking existing session and server status...")
-    print(
-        f"   TMux session '{session_name}': {'exists' if tmux_exists else 'not found'}"
-    )
-    print(f"   HTTP server: {'running' if http_running else 'not running'}")
-
-    should_start_command = True
-
-    if tmux_exists and http_running:
-        if not cfg.restart_command:
-            print("   Both session and server are running - skipping command execution")
-            should_start_command = False
-        else:
-            print("   restart_command=true - killing existing tmux session")
-            kill_tmux_session(ssh, session_name)
-
-    if should_start_command:
-        print(f"\n5. Starting HTTP server in tmux session '{session_name}'...")
-        success = create_tmux_session_with_logging(
-            ssh, session_name, cfg.task.remote_command, log_file
-        )
-
-        if not success:
-            print("ERROR: Failed to create tmux session")
-            ssh.close()
+    if has_remote_command:
+        # Tasks with remote_command need SSH connection
+        if not ssh_port:
+            print("\n3. ERROR: No SSH port found for this pod")
             sys.exit(1)
 
-        print("   TMux session created successfully")
-        print("   Waiting for HTTP server to initialize...")
-        time.sleep(5)
+        print(f"\n3. Connecting to SSH: {ssh_port['ip']}:{ssh_port['publicPort']}")
+        ssh = SSHConnection(
+            host=ssh_port["ip"],
+            port=ssh_port["publicPort"],
+            username=cfg.ssh.username,
+            timeout=cfg.ssh.timeout,
+        )
+
+        if not ssh.connect(pod_id):
+            print("ERROR: Failed to connect via SSH")
+            sys.exit(1)
+
+        # Configure git on the pod
+        git_name, git_email = get_git_config()
+        if git_name and git_email:
+            print(f"\n   Configuring git with name='{git_name}' and email='{git_email}'...")
+            if configure_git(ssh, git_name, git_email):
+                print("   Git configured successfully!")
+            else:
+                print("   Warning: Failed to configure git")
+
+        # Format tmux session name and log file with pod_id
+        session_name = cfg.tmux_session_name.replace("{pod_id}", pod_id)
+        log_file = cfg.tmux_log_file.replace("{pod_id}", pod_id)
+
+        # Check if tmux session already exists and if HTTP server is running
+        tmux_exists = check_tmux_session_exists(ssh, session_name)
+        http_running = False
+        if app_port_info:
+            http_running = check_http_server_running(
+                app_port_info["ip"], app_port_info["publicPort"]
+            )
+
+        print("\n4. Checking existing session and server status...")
+        print(
+            f"   TMux session '{session_name}': {'exists' if tmux_exists else 'not found'}"
+        )
+        print(f"   HTTP server: {'running' if http_running else 'not running'}")
+
+        should_start_command = True
+
+        if tmux_exists and http_running:
+            if not cfg.restart_command:
+                print("   Both session and server are running - skipping command execution")
+                should_start_command = False
+            else:
+                print("   restart_command=true - killing existing tmux session")
+                kill_tmux_session(ssh, session_name)
+
+        if should_start_command:
+            print(f"\n5. Starting HTTP server in tmux session '{session_name}'...")
+            success = create_tmux_session_with_logging(
+                ssh, session_name, cfg.task.remote_command, log_file
+            )
+
+            if not success:
+                print("ERROR: Failed to create tmux session")
+                ssh.close()
+                sys.exit(1)
+
+            print("   TMux session created successfully")
+            print("   Waiting for HTTP server to initialize...")
+            time.sleep(5)
+    else:
+        # For docker_args tasks (e.g., vLLM), wait for server readiness via HTTP
+        if app_port_info:
+            print("\n3. Waiting for server to be ready...")
+            if wait_for_http_ready(
+                app_port_info["ip"], app_port_info["publicPort"], cfg.startup_wait
+            ):
+                print("   Server is ready!")
+            else:
+                print("   WARNING: Server not responding yet. It may still be loading (e.g., downloading model).")
+                print(f"   Check pod logs at: https://console.runpod.io/pods?id={pod_id}")
 
     # Step 4: Get public URL and open in browser
     if not app_port_info:
         print(f"\nERROR: No TCP port found for app port {cfg.app_port}")
-        ssh.close()
+        if ssh:
+            ssh.close()
         sys.exit(1)
 
     # Use direct TCP connection: http://{ip}:{publicPort}/
@@ -341,27 +387,22 @@ def main(cfg: DictConfig):
         print(f"   Failed to open browser: {e}")
         print(f"   Please manually open: {app_url}")
 
-    # Step 5: Stream output if configured
-    if cfg.stream_output:
+    # Step 5: Stream output if configured (only for remote_command tasks)
+    if has_remote_command and cfg.stream_output:
+        log_file = cfg.tmux_log_file.replace("{pod_id}", pod_id)
         stream_tmux_output(ssh, log_file)
 
-    ssh.close()
+    if ssh:
+        ssh.close()
 
     print_section(
-        f"Configuration complete! The dashboard is still running at {app_url} and your pod is still running (and charging you money)"
+        f"Configuration complete! The server is running at {app_url} and your pod is still running (and charging you money)"
     )
     print(f"Pod ID: {pod_id}")
     print(
-        f"Remember to stop/delete the pod when you're done with `uv run runpod_cli destroy` or check the console at https://console.runpod.io/pods?id={pod_id}!"
+        f"Remember to stop/delete the pod when you're done with `runpod-cli destroy` or check the console at https://console.runpod.io/pods?id={pod_id}!"
     )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "destroy":
-            destroy_pod()
-            exit(0)
-        elif sys.argv[1] in ["pause", "stop"]:
-            pause_pod()
-            exit(0)
-    main()
+    entry_point()

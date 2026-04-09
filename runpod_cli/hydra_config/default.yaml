@@ -7,6 +7,12 @@ defaults:
   - ide: cursor
   - _self_
 
+# Allow local config overrides from .runpod/ in the current directory
+# e.g., .runpod/task/my_task.yaml → runpod-cli task=my_task
+hydra:
+  searchpath:
+    - file://.runpod
+
 # Cloud type for pod creation. null means "do not enforce" (let RunPod decide).
 cloud_type: null
 

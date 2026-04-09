@@ -1,0 +1,45 @@
+# vLLM server task — uses RunPod's official vLLM template (pvcdqlwm9r)
+# The server starts as the container's main process via dockerArgs.
+# No SSH/tmux needed — configure everything through this file.
+#
+# Usage:
+#   runpod-cli task=vllm gpu=a100 app_port=8000 task.model=meta-llama/Llama-3.1-8B-Instruct
+#
+# All vLLM endpoints available at http://<pod-ip>:<port>/v1/
+#   - /v1/chat/completions
+#   - /v1/completions
+#   - /v1/models
+#   - /v1/load_lora_adapter    (dynamic LoRA)
+#   - /v1/unload_lora_adapter
+
+template_id: "pvcdqlwm9r"
+project_path: "/workspace"
+
+# REQUIRED — override with: task.model=your-org/your-model
+model: ???
+
+# LoRA configuration
+enable_lora: true
+max_loras: 4
+max_lora_rank: 64
+
+# vLLM server settings
+dtype: auto
+enforce_eager: true
+gpu_memory_utilization: 0.95
+
+# Dynamic LoRA: load any adapter at request time via /v1/load_lora_adapter
+dynamic_lora: true
+
+# Docker start command — passed as dockerArgs to the container.
+# Override individual fields above, or override this entirely for full control.
+docker_args: >-
+  ${.model}
+  --host 0.0.0.0
+  --port ${app_port}
+  --dtype ${.dtype}
+  --enforce-eager
+  --gpu-memory-utilization ${.gpu_memory_utilization}
+  --enable-lora
+  --max-loras ${.max_loras}
+  --max-lora-rank ${.max_lora_rank}

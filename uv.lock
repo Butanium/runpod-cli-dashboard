@@ -2,6 +2,10 @@ version = 1
 revision = 3
 requires-python = ">=3.11"
 
+[options]
+exclude-newer = "2026-04-02T18:01:26.371669429Z"
+exclude-newer-span = "P7D"
+
 [[package]]
 name = "antlr4-python3-runtime"
 version = "4.9.3"
@@ -641,13 +645,14 @@ wheels = [
 [[package]]
 name = "runpod-cli-dashboard"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "hydra-core" },
     { name = "loguru" },
     { name = "paramiko" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "requests" },
 ]
 
@@ -658,6 +663,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "paramiko", specifier = ">=4.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.32.5" },
 ]
 

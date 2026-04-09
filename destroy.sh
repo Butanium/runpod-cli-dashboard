@@ -1,1 +1,1 @@
-uv run runpod_cli.py destroy
+runpod-cli destroy
