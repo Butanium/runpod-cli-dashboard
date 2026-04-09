@@ -84,23 +84,34 @@ class RunPodClient:
         self.api_url = api_url
         self._gpu_types_cache: list[dict] | None = None
 
-    def _graphql_query(self, query: str) -> Dict:
-        """Execute a GraphQL query against RunPod API."""
-        try:
-            response = requests.post(
-                f"{self.api_url}?api_key={self.api_key}",
-                json={"query": query},
-                headers={"content-type": "application/json"},
-                timeout=30,
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"API Error: {e}")
-            print(
-                f"Response: {response.text if 'response' in locals() else 'No response'}"
-            )
-            raise
+    def _graphql_query(self, query: str, retries: int = 3) -> Dict:
+        """Execute a GraphQL query against RunPod API with retries on transient errors."""
+        for attempt in range(retries):
+            try:
+                response = requests.post(
+                    f"{self.api_url}?api_key={self.api_key}",
+                    json={"query": query},
+                    headers={"content-type": "application/json"},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status in (502, 503, 504) and attempt < retries - 1:
+                    wait = 2 ** attempt
+                    print(f"API {status} error, retrying in {wait}s... (attempt {attempt + 1}/{retries})")
+                    import time
+                    time.sleep(wait)
+                    continue
+                print(f"API Error: {e}")
+                raise
+            except Exception as e:
+                print(f"API Error: {e}")
+                print(
+                    f"Response: {response.text if 'response' in locals() else 'No response'}"
+                )
+                raise
 
     def get_gpu_types(self) -> list[dict]:
         """Return the list of available RunPod GPU types.
@@ -482,8 +493,8 @@ def destroy_pod():
 
     if client.terminate_pod(pod_id):
         print(f"\nSuccessfully shut down pod {pod_id}")
-        from runpod_cli.config import LATEST_POD_FILE
-        LATEST_POD_FILE.unlink(missing_ok=True)
+        from runpod_cli.config import clear_pod_state
+        clear_pod_state()
     else:
         print(f"\nFailed to shut down pod {pod_id}")
         sys.exit(1)

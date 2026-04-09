@@ -5,13 +5,14 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import json
 import yaml
 from huggingface_hub import get_token as hf_get_token
 
 CONFIG_DIR = Path.home() / ".config" / "runpod-cli"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 LOCAL_CONFIG_FILE = Path(".runpod") / "config.yaml"
-LATEST_POD_FILE = CONFIG_DIR / "latest_pod"
+ACTIVE_POD_FILE = Path(".runpod") / "active_pod.json"
 
 
 def _load_config_file(path: Path) -> dict:
@@ -120,12 +121,15 @@ def run_setup(first_time: bool = True, local: bool = False) -> dict:
         print("\nPress Enter to keep current value.")
     print()
 
-    # 1. Username (required)
+    # 1. Username (required) — default to system username
+    import getpass
+    name_default = config.get("name") or getpass.getuser().lower().replace(" ", "-")
+
     print("Username (used to prefix pod names):")
     while True:
         name = _prompt_field(
             "Username (lowercase, alphanumeric)",
-            config.get("name"),
+            name_default,
             required=True,
         )
         name = name.strip().lower()
@@ -135,31 +139,46 @@ def run_setup(first_time: bool = True, local: bool = False) -> dict:
         print("    Must be alphanumeric (hyphens/underscores allowed)")
 
     # 2. RunPod API key (optional)
-    print("\nRunPod API key:")
     env_key = os.environ.get("RUNPOD_API_KEY")
     if env_key:
-        print("  (RUNPOD_API_KEY found in environment — will be used automatically)")
-    print("  Enter your key, or press Enter if you'll set RUNPOD_API_KEY in your environment.")
-    config["api_key"] = _prompt_field("API key", config.get("api_key"), secret=True)
-
-    # 3. Git config (optional)
-    print("\nGit configuration (for committing on pods):")
-    config["git_name"] = _prompt_field("Git name", config.get("git_name"))
-    config["git_email"] = _prompt_field("Git email", config.get("git_email"))
-
-    # 4. HF token (optional)
-    print("\nHugging Face token (for private models/datasets):")
-    print("  Enter a token, 'd' for default (~/.huggingface/token), or Enter to skip.")
-    hf_input = _prompt_field("HF token", config.get("hf_token"), secret=True)
-    if hf_input and hf_input.lower() == "d" and hf_input != config.get("hf_token"):
-        hf_token = hf_get_token()
-        assert hf_token is not None, (
-            "Default HF token not found. Run 'huggingface-cli login' first."
-        )
-        config["hf_token"] = hf_token
-        print("    Using default token from Hugging Face CLI.")
+        print(f"\nRunPod API key: detected from RUNPOD_API_KEY env var ({_mask_secret(env_key)})")
+        print("  Enter a different key to store in config, or press Enter to use the env var.")
+        config["api_key"] = _prompt_field("API key", config.get("api_key"), secret=True)
     else:
-        config["hf_token"] = hf_input
+        print("\nRunPod API key:")
+        print("  Enter your key, or press Enter if you'll set RUNPOD_API_KEY in your environment.")
+        config["api_key"] = _prompt_field("API key", config.get("api_key"), secret=True)
+
+    # 3. Git config (optional) — default to global git config
+    import subprocess
+    def _git_global(key: str) -> str | None:
+        try:
+            return subprocess.run(
+                ["git", "config", "--global", key],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip() or None
+        except Exception:
+            return None
+
+    git_name_default = config.get("git_name") or _git_global("user.name")
+    git_email_default = config.get("git_email") or _git_global("user.email")
+
+    print("\nGit configuration (for committing on pods):")
+    config["git_name"] = _prompt_field("Git name", git_name_default)
+    config["git_email"] = _prompt_field("Git email", git_email_default)
+
+    # 4. HF token (optional) — auto-detect from huggingface-cli
+    hf_default = config.get("hf_token")
+    if not hf_default:
+        hf_default = hf_get_token()
+
+    if hf_default:
+        print(f"\nHugging Face token: detected ({_mask_secret(hf_default)})")
+        config["hf_token"] = _prompt_field("HF token", hf_default, secret=True)
+    else:
+        print("\nHugging Face token (for private models/datasets):")
+        print("  No token detected. Enter one, or press Enter to skip.")
+        config["hf_token"] = _prompt_field("HF token", secret=True)
 
     _save_config_file(config, config_path)
     print(f"\nConfiguration saved to {config_path}")
@@ -215,17 +234,57 @@ def get_api_key() -> Optional[str]:
     return config.get("api_key")
 
 
-def save_latest_pod_id(pod_id: str):
-    """Save pod ID to latest_pod file."""
-    _ensure_config_dir()
-    LATEST_POD_FILE.write_text(pod_id)
-    print(f"   Saved pod ID to {LATEST_POD_FILE}")
+def save_pod_state(
+    pod_id: str,
+    task_config_name: str | None = None,
+    task_config: dict | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    created_at: str | None = None,
+):
+    """Save active pod state to .runpod/active_pod.json.
+
+    Can be called multiple times — later calls merge new fields into existing state.
+    """
+    from datetime import datetime, timezone
+
+    ACTIVE_POD_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    state = load_pod_state() or {}
+    state["pod_id"] = pod_id
+    if task_config_name is not None:
+        state["task_config_name"] = task_config_name
+    if task_config is not None:
+        state["task_config"] = task_config
+    if host is not None:
+        state["host"] = host
+    if port is not None:
+        state["port"] = port
+    if created_at is not None:
+        state["created_at"] = created_at
+    elif "created_at" not in state:
+        state["created_at"] = datetime.now(timezone.utc).isoformat()
+
+    ACTIVE_POD_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    print(f"   Saved pod state to {ACTIVE_POD_FILE}")
+
+
+def load_pod_state() -> dict | None:
+    """Load active pod state from .runpod/active_pod.json."""
+    if ACTIVE_POD_FILE.exists():
+        try:
+            return json.loads(ACTIVE_POD_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+    return None
 
 
 def get_latest_pod_id() -> Optional[str]:
-    """Read pod ID from latest_pod file if it exists."""
-    if LATEST_POD_FILE.exists():
-        pod_id = LATEST_POD_FILE.read_text().strip()
-        if pod_id:
-            return pod_id
-    return None
+    """Get pod_id from saved pod state."""
+    state = load_pod_state()
+    return state.get("pod_id") if state else None
+
+
+def clear_pod_state():
+    """Remove the active pod state file."""
+    ACTIVE_POD_FILE.unlink(missing_ok=True)

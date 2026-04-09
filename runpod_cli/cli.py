@@ -25,7 +25,7 @@ from runpod_cli.ssh import (
 from runpod_cli.config import (
     get_or_prompt_user,
     get_api_key,
-    save_latest_pod_id,
+    save_pod_state,
     get_latest_pod_id,
     get_git_config,
     get_hf_token,
@@ -83,8 +83,13 @@ def main(cfg: DictConfig):
     has_remote_command = "remote_command" in cfg.task
     docker_args = cfg.task.get("docker_args")
 
-    # Build extra env vars for pod creation
+    # Build extra env vars for pod creation.
+    # VLLM_API_KEY is set to the RunPod account API key so that clients can
+    # authenticate with the vLLM server using the same RUNPOD_API_KEY they
+    # already have configured (e.g. in safety-tooling/.env). This avoids
+    # per-pod key derivation (the RunPod template default is sk-{pod_id}).
     extra_env = {}
+    extra_env["VLLM_API_KEY"] = api_key
     if cfg.task.get("dynamic_lora"):
         extra_env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "True"
 
@@ -175,7 +180,7 @@ def main(cfg: DictConfig):
                                         f"   Pod {matched_pod_id} resumed successfully!"
                                     )
                                     pod_id = matched_pod_id
-                                    save_latest_pod_id(pod_id)
+                                    save_pod_state(pod_id)
 
                                     # Wait for pod to be ready
                                     if not client.wait_for_pod_ready(
@@ -229,7 +234,7 @@ def main(cfg: DictConfig):
             print(f"   Pod created successfully! ID: {pod_id}")
 
             # Save the new pod ID
-            save_latest_pod_id(pod_id)
+            save_pod_state(pod_id)
 
             # Wait for pod to be ready
             if not client.wait_for_pod_ready(pod_id, cfg.startup_wait):
@@ -269,6 +274,18 @@ def main(cfg: DictConfig):
             app_port_info = port
 
     print(f"   Uptime: {pod['runtime']['uptimeInSeconds']} seconds")
+
+    # Save rich pod state
+    from omegaconf import OmegaConf
+    from hydra.core.hydra_config import HydraConfig
+    task_config_name = HydraConfig.get().runtime.choices.get("task", "unknown")
+    save_pod_state(
+        pod_id=pod_id,
+        task_config_name=task_config_name,
+        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        host=ssh_port["ip"] if ssh_port else (app_port_info["ip"] if app_port_info else None),
+        port=ssh_port["publicPort"] if ssh_port else None,
+    )
 
     # Update SSH config file with pod connection details (no SSH connection needed)
     if ssh_port:

@@ -11,6 +11,14 @@
 #   - /v1/models
 #   - /v1/load_lora_adapter    (dynamic LoRA)
 #   - /v1/unload_lora_adapter
+#
+# Authentication:
+#   The CLI sets VLLM_API_KEY on the pod to your RunPod account API key
+#   (the same key used to create pods). This means clients authenticate with
+#   the vLLM server using the same RUNPOD_API_KEY they already have configured.
+#   This is intentional: safety-tooling's InferenceAPI reads RUNPOD_API_KEY
+#   from the environment and sends it as a Bearer token, so using the same key
+#   on both sides avoids any per-pod key management.
 
 template_id: "pvcdqlwm9r"
 project_path: "/workspace"
