@@ -48,7 +48,10 @@ def entry_point():
             return
         if cmd == "config":
             sys.argv.pop(1)  # remove "config" so hydra doesn't see it
-            run_setup(first_time=False)
+            local = "--local" in sys.argv
+            if local:
+                sys.argv.remove("--local")
+            run_setup(first_time=False, local=local)
             return
 
     main()

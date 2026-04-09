@@ -1,0 +1,204 @@
+# RunPod CLI Dashboard
+
+CLI tool for managing RunPod GPU pods. One command to create a pod, connect, run a service, and get a URL.
+
+## Installation
+
+```bash
+uv add git+https://github.com/Butanium/runpod-cli-dashboard
+```
+
+This installs the `runpod-cli` command.
+
+## First-time setup
+
+```bash
+runpod-cli config
+```
+
+Prompts for:
+- Username (required) — prefixes pod names
+- RunPod API key (optional if RUNPOD_API_KEY env var is set)
+- Git name/email (optional, for committing on pods)
+- HuggingFace token (optional, for private models)
+
+Saved to `~/.config/runpod-cli/config.yaml`. Use `--local` to save per-project overrides to `.runpod/config.yaml`.
+
+## Commands
+
+```bash
+runpod-cli                    # Launch pod with default settings
+runpod-cli config             # Edit global config
+runpod-cli config --local     # Edit local config (.runpod/config.yaml)
+runpod-cli pause              # Stop pod (can resume later)
+runpod-cli destroy            # Terminate and delete pod
+```
+
+## Hydra configuration
+
+All settings are overridable on the command line using Hydra syntax:
+
+```bash
+runpod-cli gpu=a100 storage=large open_ide=false
+runpod-cli --cfg job    # Print resolved config without running
+```
+
+### Config groups
+
+**gpu=**: `a40` (default), `a100`, `h100`, `2a100`, `4a40`
+**storage=**: `default` (100GB vol / 200GB disk), `large` (500GB / 500GB)
+**task=**: `dashboard` (default), `testing`, `vllm`
+**ide=**: `cursor` (default), `vscode`
+
+### Top-level settings
+
+```
+cloud_type=null|SECURE|COMMUNITY   # GPU cloud type
+pod_name=runpod-cli-dashboard      # Pod name suffix (prefixed with username)
+target_pod_id=null                 # Use a specific existing pod
+reuse=true                         # Reuse/resume latest pod if available
+app_port=8501                      # Application port to expose
+volume_mount_path=/workspace       # Volume mount path on the pod
+ssh.username=root                  # SSH username
+ssh.timeout=30                     # SSH connection timeout
+stream_output=true                 # Stream tmux output to terminal
+open_ide=true                      # Open IDE on pod connect
+restart_command=false              # Kill existing tmux session before starting
+startup_wait=360                   # Seconds to wait for pod to be ready
+```
+
+## Launching a dashboard (default)
+
+```bash
+runpod-cli
+runpod-cli gpu=h100
+runpod-cli gpu=a100 storage=large
+```
+
+Creates a pod, SSHes in, runs the dashboard command in tmux, opens the URL in a browser.
+
+## Launching a vLLM server
+
+```bash
+# Basic — model is required
+runpod-cli task=vllm gpu=a100 app_port=8000 task.model=meta-llama/Llama-3.1-8B-Instruct
+
+# Custom LoRA settings
+runpod-cli task=vllm gpu=h100 app_port=8000 \
+  task.model=my-org/my-model \
+  task.max_loras=8 \
+  task.max_lora_rank=128 \
+  task.gpu_memory_utilization=0.9
+
+# Disable LoRA
+runpod-cli task=vllm gpu=a100 app_port=8000 \
+  task.model=my-org/my-model \
+  task.enable_lora=false \
+  task.dynamic_lora=false \
+  task.docker_args='${.model} --host 0.0.0.0 --port ${app_port} --dtype ${.dtype} --enforce-eager --gpu-memory-utilization ${.gpu_memory_utilization}'
+```
+
+Uses RunPod's official vLLM template (vllm/vllm-openai:latest). The server starts as the container process — no SSH needed.
+
+vLLM task settings:
+```
+task.model=???                        # REQUIRED: HuggingFace model ID
+task.enable_lora=true                 # Enable LoRA adapter support
+task.max_loras=4                      # Max LoRA adapters per batch
+task.max_lora_rank=64                 # Max LoRA rank
+task.dtype=auto                       # Model dtype
+task.enforce_eager=true               # Disable CUDA graph capture
+task.gpu_memory_utilization=0.95      # GPU memory fraction
+task.dynamic_lora=true                # Enable runtime LoRA loading via API
+```
+
+When dynamic_lora=true, VLLM_ALLOW_RUNTIME_LORA_UPDATING=True is set in the container env.
+
+### vLLM endpoints
+
+Once running, the server exposes OpenAI-compatible endpoints at `http://<pod-ip>:<port>/v1/`:
+
+- POST `/v1/chat/completions` — chat completions
+- POST `/v1/completions` — text completions
+- GET `/v1/models` — list loaded models
+- POST `/v1/load_lora_adapter` — dynamically load a LoRA adapter
+- POST `/v1/unload_lora_adapter` — unload a LoRA adapter
+- GET `/health` — health check
+
+## Custom configs
+
+### Per-project task config
+
+Create `.runpod/task/my_task.yaml` in your project:
+
+```yaml
+template_id: "runpod-torch-v240"
+project_path: "/workspace/my-project"
+remote_command: |
+  source ~/.bashrc
+  cd ${.project_path}
+  git pull
+  python train.py
+```
+
+Then: `runpod-cli task=my_task gpu=h100`
+
+### Global task config
+
+Same thing but in `~/.config/runpod-cli/configs/task/` — available from any directory.
+
+### Custom GPU config
+
+```yaml
+# .runpod/gpu/2h100.yaml
+type: "NVIDIA H100 80GB HBM3"
+n: 2
+```
+
+Then: `runpod-cli gpu=2h100`
+
+### Custom vLLM preset
+
+```yaml
+# .runpod/task/llama70b.yaml
+template_id: "pvcdqlwm9r"
+project_path: "/workspace"
+model: "meta-llama/Llama-3.1-70B-Instruct"
+enable_lora: false
+dtype: bfloat16
+enforce_eager: true
+gpu_memory_utilization: 0.95
+dynamic_lora: false
+docker_args: >-
+  ${.model} --host 0.0.0.0 --port ${app_port}
+  --dtype ${.dtype} --enforce-eager
+  --gpu-memory-utilization ${.gpu_memory_utilization}
+  --tensor-parallel-size 2
+```
+
+Then: `runpod-cli task=llama70b gpu=2a100 app_port=8000`
+
+### Config precedence
+
+local `.runpod/` > global `~/.config/runpod-cli/configs/` > built-in package defaults.
+
+## Pod reuse
+
+By default (reuse=true), the CLI reuses existing pods:
+1. Checks last-used pod — if running, reconnects immediately
+2. If stopped and GPU matches — resumes it
+3. If GPU doesn't match — searches all your pods for a compatible stopped one
+4. Falls back to creating a new pod
+
+## API key
+
+Resolved in order: RUNPOD_API_KEY env var > config file api_key > .env file.
+
+## SSH access
+
+The CLI updates `~/.ssh/config` with pod connection details. After launch:
+
+```bash
+ssh <pod-name>                        # Direct SSH
+cursor --remote ssh-remote+<pod-name> /workspace   # Open in IDE
+```

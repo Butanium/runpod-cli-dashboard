@@ -10,28 +10,37 @@ from huggingface_hub import get_token as hf_get_token
 
 CONFIG_DIR = Path.home() / ".config" / "runpod-cli"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
+LOCAL_CONFIG_FILE = Path(".runpod") / "config.yaml"
 LATEST_POD_FILE = CONFIG_DIR / "latest_pod"
 
 
-def _ensure_config_dir():
-    """Create the config directory if it doesn't exist."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def load_user_config() -> dict:
-    """Load user config from config.yaml."""
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
+def _load_config_file(path: Path) -> dict:
+    """Load a single YAML config file."""
+    if path.exists():
+        with open(path) as f:
             config = yaml.safe_load(f)
             return config if config else {}
     return {}
 
 
-def save_user_config(config: dict):
-    """Save user config to config.yaml."""
-    _ensure_config_dir()
-    with open(CONFIG_FILE, "w") as f:
+def _save_config_file(config: dict, path: Path):
+    """Save config to a YAML file, creating parent dirs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
+
+
+def load_user_config() -> dict:
+    """Load user config, merging global and local (local overrides global)."""
+    config = _load_config_file(CONFIG_FILE)
+    local = _load_config_file(LOCAL_CONFIG_FILE)
+    config.update({k: v for k, v in local.items() if v is not None})
+    return config
+
+
+def save_user_config(config: dict):
+    """Save user config to global config file."""
+    _save_config_file(config, CONFIG_FILE)
 
 
 def _mask_secret(value: str, show_chars: int = 4) -> str:
@@ -76,22 +85,25 @@ def _prompt_field(
     return value
 
 
-def run_setup(first_time: bool = True) -> dict:
+def run_setup(first_time: bool = True, local: bool = False) -> dict:
     """Interactive configuration setup.
 
     Args:
         first_time: If True, shows welcome message. If False, shows current config
                     and allows updating individual fields.
+        local: If True, saves to .runpod/config.yaml in CWD instead of global config.
     """
-    config = load_user_config()
+    config_path = LOCAL_CONFIG_FILE if local else CONFIG_FILE
+    config = _load_config_file(config_path)
 
     print("\n" + "=" * 60)
     if first_time:
         print("Welcome to RunPod CLI! Let's set up your configuration.")
     else:
-        print("RunPod CLI — Update Configuration")
+        scope = "Local" if local else "Global"
+        print(f"RunPod CLI — Update {scope} Configuration")
     print("=" * 60)
-    print(f"Config file: {CONFIG_FILE}")
+    print(f"Config file: {config_path}")
 
     if not first_time and config:
         print("\nCurrent settings:")
@@ -149,8 +161,8 @@ def run_setup(first_time: bool = True) -> dict:
     else:
         config["hf_token"] = hf_input
 
-    save_user_config(config)
-    print(f"\nConfiguration saved to {CONFIG_FILE}")
+    _save_config_file(config, config_path)
+    print(f"\nConfiguration saved to {config_path}")
     print("=" * 60 + "\n")
 
     return config
